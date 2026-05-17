@@ -291,14 +291,14 @@ void Application::tick()
     }
     markStage(frameCounters.stagePlayer);
 
-    // 3. Install mesh results from prior ticks, then dispatch new mesh jobs
-    //    before lighting so nearby terrain becomes visible with fallback
-    //    lighting instead of waiting behind expensive light propagation.
+    // 3. Install mesh results from prior ticks, then dispatch new mesh jobs.
+    //    The default shader-lighting path skips CPU propagation entirely; the
+    //    optional CPU path still runs after meshing so visibility is not blocked.
     const auto meshInstallStats = installMeshResults();
     markStage(frameCounters.stageMeshInstall);
     const auto meshDispatchStats = dispatchMeshJobs();
     markStage(frameCounters.stageMeshDispatch);
-    const auto lightingStats = propagateLightingForDirtyChunks();
+    const auto lightingStats = config_.useGpuShaderLighting ? LightingStats{} : propagateLightingForDirtyChunks();
     markStage(frameCounters.stageLighting);
     frameCounters.meshJobsCompleted = meshInstallStats.completed;
     frameCounters.meshJobsDiscardedStale = meshInstallStats.staleDiscarded;
@@ -314,7 +314,7 @@ void Application::tick()
     frameCounters.meshBuild = meshInstallStats.meshBuildTime;
     core::mergeTimer(frameCounters.queueWait, meshInstallStats.queueWaitTime);
     frameCounters.uploadBudgetDeferrals = meshInstallStats.uploadBudgetDeferrals;
-    if (lightingStats.recomputed >= maxLightPropagationsPerTick_) {
+    if (!config_.useGpuShaderLighting && lightingStats.recomputed >= maxLightPropagationsPerTick_) {
         frameCounters.lightingBudgetSaturated = 1;
     }
     if (meshInstallStats.uploadBudgetDeferrals > 0) {
@@ -1181,6 +1181,9 @@ std::uint64_t Application::lightingNeighborHash(world::ChunkCoord coord) const
 
 void Application::enqueueLightingIfNeeded(world::ChunkCoord coord)
 {
+    if (config_.useGpuShaderLighting) {
+        return;
+    }
     const auto* chunk = chunks_.find(coord);
     if (chunk == nullptr) {
         return;
@@ -1212,12 +1215,12 @@ void Application::enqueueMeshIfNeeded(world::ChunkCoord coord)
 void Application::enqueueInstalledChunkWork(const world::ChunkPipelineStats& stats)
 {
     for (const auto coord : stats.installedChunks) {
-        enqueueLightingIfNeeded(coord);
         enqueueMeshIfNeeded(coord);
+        enqueueLightingIfNeeded(coord);
     }
     for (const auto coord : stats.neighborDirtyChunks) {
-        enqueueLightingIfNeeded(coord);
         enqueueMeshIfNeeded(coord);
+        enqueueLightingIfNeeded(coord);
     }
 }
 
@@ -1447,10 +1450,11 @@ Application::MeshDispatchStats Application::dispatchMeshJobs()
             core::recordTimer(stats.snapshotTime, elapsedUs(snapshotStart, std::chrono::steady_clock::now()));
 
             const auto* renderCatalog = &blockRenderCatalog_;
+            const bool shaderLighting = config_.useGpuShaderLighting;
             auto* mailbox = &chunkJobMailbox_;
             const auto enqueueTime = std::chrono::steady_clock::now();
             jobs_.submit({"chunk.mesh", core::JobPriority::Critical},
-                [bundle, coord, revision, neighborRevisionHash, mailbox, renderCatalog, enqueueTime]() mutable {
+                [bundle, coord, revision, neighborRevisionHash, mailbox, renderCatalog, shaderLighting, enqueueTime]() mutable {
                     const auto start = std::chrono::steady_clock::now();
                     render::meshing::ChunkNeighborhood neighborhood{};
                     neighborhood.negX = bundle->neighbours[0].get();
@@ -1462,7 +1466,7 @@ Application::MeshDispatchStats Application::dispatchMeshJobs()
 
                     render::meshing::GreedyMesher mesher;
                     auto mesh = mesher.build(bundle->target, *renderCatalog,
-                                              bundle->target.lightData(), neighborhood);
+                                              shaderLighting ? nullptr : bundle->target.lightData(), neighborhood);
                     const auto end = std::chrono::steady_clock::now();
                     mesh.sourceMeshRevisionHash = neighborRevisionHash;
                     world::ChunkMeshResult result{};

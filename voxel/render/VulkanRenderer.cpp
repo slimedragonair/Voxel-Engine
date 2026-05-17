@@ -395,13 +395,17 @@ bool VulkanRenderer::uploadChunkMesh(world::ChunkCoord coord, const meshing::Chu
         entry.origin[1] = static_cast<float>(coord.y * world::ChunkSize);
         entry.origin[2] = static_cast<float>(coord.z * world::ChunkSize);
         entry.origin[3] = 0.0F;
-        entry.boundsMin[0] = entry.origin[0];
-        entry.boundsMin[1] = entry.origin[1] + sec.minY;
-        entry.boundsMin[2] = entry.origin[2];
+        entry.boundsMin[0] = entry.origin[0] - 1.0F;
+        entry.boundsMin[1] = entry.origin[1] - 1.0F;
+        entry.boundsMin[2] = entry.origin[2] - 1.0F;
         entry.boundsMin[3] = 0.0F;
-        entry.extent[0] = static_cast<float>(world::ChunkSize);
-        entry.extent[1] = std::max(1.0F, sec.maxY - sec.minY);
-        entry.extent[2] = static_cast<float>(world::ChunkSize);
+        // Greedy quads can span across the 16-block section split. Use a
+        // conservative full-chunk AABB for culling until section-local mesh
+        // splitting is introduced; otherwise boundary-spanning quads can flicker
+        // when the narrower section bounds leave the frustum.
+        entry.extent[0] = static_cast<float>(world::ChunkSize) + 2.0F;
+        entry.extent[1] = static_cast<float>(world::ChunkSize) + 2.0F;
+        entry.extent[2] = static_cast<float>(world::ChunkSize) + 2.0F;
         entry.extent[3] = 0.0F;
         entry.indexCount = sec.opaqueIndexCount;
         entry.firstIndex = indexBase + sec.opaqueFirstIndex;
