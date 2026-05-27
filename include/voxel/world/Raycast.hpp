@@ -4,6 +4,7 @@
 #include <optional>
 
 #include <voxel/core/Math.hpp>
+#include <voxel/world/BlockState.hpp>
 #include <voxel/world/ChunkManager.hpp>
 #include <voxel/world/Coordinates.hpp>
 
@@ -44,13 +45,22 @@ struct VoxelRaycastHit {
 
 class VoxelRaycaster {
 public:
+    void setFluidBlockType(BlockTypeId type) noexcept { fluidBlockType_ = type; }
+    [[nodiscard]] BlockTypeId fluidBlockType() const noexcept { return fluidBlockType_; }
+
     [[nodiscard]] std::optional<VoxelRaycastHit> cast(const ChunkManager& chunks, const VoxelRay& ray) const;
+
+private:
+    BlockTypeId fluidBlockType_{12};
 };
 
 // Categorizes a block for raycast masking. Pure function, safe to call
 // hot. Future fluid kinds (lava, slime, magic water) extend this without
 // touching the raycaster itself.
 [[nodiscard]] bool blockMatchesRaycastMask(BlockStateId block, RaycastMask mask) noexcept;
+[[nodiscard]] bool blockMatchesRaycastMask(
+    BlockStateId block,
+    RaycastMask mask,
+    BlockTypeId fluidBlockType) noexcept;
 
 } // namespace voxel::world
-

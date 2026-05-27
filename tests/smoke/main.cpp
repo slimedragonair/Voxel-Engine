@@ -82,6 +82,7 @@ int main()
     using voxel::world::ClusterChunkExtent;
     using voxel::world::LodLevel;
     using voxel::world::LodSettings;
+    using voxel::world::RegionCoord;
     VOXEL_CHECK(ClusterChunkExtent == 4); // anchor for the band assertions below
 
     // Positive coords: straightforward division.
@@ -106,6 +107,17 @@ int main()
             const ChunkCoord c{12 + dx, -8 + dy, 0};
             VOXEL_CHECK(voxel::world::chunkToCluster(c) == (ClusterCoord{3, -2, 0}));
         }
+    }
+
+    {
+        const auto targets = voxel::world::lodInvalidationTargetsForEditedChunk({17, -1, 33});
+        VOXEL_CHECK(targets.cluster == (ClusterCoord{4, -1, 8}));
+        VOXEL_CHECK(targets.region == (RegionCoord{1, -1, 2}));
+    }
+    {
+        const auto targets = voxel::world::lodInvalidationTargetsForEditedChunk({-17, -16, -1});
+        VOXEL_CHECK(targets.cluster == (ClusterCoord{-5, -4, -1}));
+        VOXEL_CHECK(targets.region == (RegionCoord{-2, -1, -1}));
     }
 
     // LOD tier selection on default bands {8, 24, 96, 1600}.
@@ -433,6 +445,17 @@ int main()
         const auto collision = reorderedBlocks.buildCollisionCatalog();
         VOXEL_CHECK(!collision.isSolid(ids.water));
         VOXEL_CHECK(collision.isSolid(ids.stone));
+        VOXEL_CHECK(voxel::world::blockMatchesRaycastMask(
+            ids.water,
+            voxel::world::RaycastMask::FluidsOnly,
+            ids.waterType));
+        VOXEL_CHECK(!voxel::world::blockMatchesRaycastMask(
+            voxel::world::makeBlockState(voxel::BlockTypeId{12}),
+            voxel::world::RaycastMask::FluidsOnly,
+            ids.waterType));
+        voxel::world::VoxelRaycaster reorderedRaycaster;
+        reorderedRaycaster.setFluidBlockType(ids.waterType);
+        VOXEL_CHECK(reorderedRaycaster.fluidBlockType().value == ids.waterType.value);
         VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(voxel::world::makeBlockState(voxel::BlockTypeId{12})));
         VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(
             voxel::world::makeBlockState(voxel::BlockTypeId{12}, 7)));

@@ -272,6 +272,7 @@ void Application::initialize()
     if (!coreBlocks_.allRequiredResolved) {
         Logger::warn("Core block ID resolution fell back for one or more entries; check core block data.");
     }
+    raycaster_.setFluidBlockType(coreBlocks_.waterType);
     terrainGenerator_ = world::NoiseTerrainGenerator(terrainSettingsForConfig(config_, coreBlocks_));
     {
         const auto terrainPath = config_.paths.coreDataRoot() / "terrain.json";
@@ -1377,9 +1378,8 @@ core::RuntimeCounters Application::handleWorldInteraction()
             // cell, BFS-activate that water so it can start flowing into the
             // newly opened space. Bounded radius keeps the cost predictable
             // when exposing the ocean.
-            const auto waterValue = terrainGenerator_.settings().waterBlock.value;
             const bool nowAir = blockDelta->next.value == world::AirBlockState.value;
-            const bool wasWater = (blockDelta->previous.value >> 16) == (waterValue >> 16);
+            const bool wasWater = coreBlocks_.isWater(blockDelta->previous);
             if (nowAir && !wasWater) {
                 // Check the 6 neighbours; if any is water, kick off activation
                 // from that neighbour's cell with a small radius.
@@ -1399,7 +1399,7 @@ core::RuntimeCounters Application::handleWorldInteraction()
                     if (auto* neighbourChunk = chunks_.find(neighbourLocal.chunk)) {
                         const auto block = neighbourChunk->blockAt(
                             neighbourLocal.local.x, neighbourLocal.local.y, neighbourLocal.local.z);
-                        if ((block.value >> 16) == (waterValue >> 16)) {
+                        if (coreBlocks_.isWater(block)) {
                             // 8-cell BFS unlock — bounded cost per edit.
                             // Route to whichever sim owns the queue this run.
                             // PHASE 5 TODO: the GPU sim's activateOceanEdge is
@@ -1435,21 +1435,21 @@ void Application::invalidateLodForEditedChunk(world::ChunkCoord coord)
         return;
     }
 
-    const auto cluster = world::chunkToCluster(coord);
-    const auto erased = builtClusters_.erase(cluster);
-    clusterRenderer_->removeClusterMesh(cluster);
+    const auto targets = world::lodInvalidationTargetsForEditedChunk(coord);
+    const auto erased = builtClusters_.erase(targets.cluster);
+    clusterRenderer_->removeClusterMesh(targets.cluster);
     if (erased != 0) {
         Logger::info(
             "LOD2 cluster invalidated by block edit: "
-            + std::to_string(cluster.x) + ","
-            + std::to_string(cluster.y) + ","
-            + std::to_string(cluster.z));
+            + std::to_string(targets.cluster.x) + ","
+            + std::to_string(targets.cluster.y) + ","
+            + std::to_string(targets.cluster.z));
     }
 
     // LOD3 is currently a procedural clipmap sampled from NoiseTerrainGenerator,
     // not an edit-aware voxel aggregate. Player edits are represented by LOD0
-    // chunks and edit-invalidated LOD2 clusters; far LOD3 intentionally stays
-    // terrain-noise-only until we add an edit delta layer for clipmaps.
+    // chunks and edit-invalidated LOD2 clusters. `targets.region` names the
+    // future edit-aware clipmap target; it is intentionally not invalidated yet.
 }
 
 core::RuntimeCounters Application::flushPendingSaves(bool force)
@@ -3785,10 +3785,9 @@ void Application::tickRegionMaintenance()
                 const world::RegionCoord candidate{
                     centerRegion.x + dx, ry, centerRegion.z + dz};
 
-                // Already built? Skip (no source-data dirty tracking yet
-                // for regions — we trust the cache hash check in the
-                // future, but for now once built they stay built until
-                // eviction).
+                // Already built? Skip. LOD3 clipmaps are keyed by the
+                // terrain-version source hash and intentionally ignore
+                // player edit deltas until the clipmap has an edit layer.
                 if (builtRegions_.count(candidate) != 0) continue;
 
                 target = candidate;
