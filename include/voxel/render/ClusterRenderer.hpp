@@ -176,8 +176,11 @@ public:
 
 private:
     struct GpuResources;
+    struct UploadedCluster;
     void destroyPipelines() noexcept;
     [[nodiscard]] bool createPipelines();
+    [[nodiscard]] std::uint32_t allocateSceneEntryIndex() const noexcept;
+    void releaseUploadedRecord(const UploadedCluster& record) noexcept;
 
     VulkanRenderer& renderer_;
     std::unique_ptr<GpuResources> gpu_;

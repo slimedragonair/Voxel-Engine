@@ -1933,6 +1933,16 @@ int main()
         VOXEL_CHECK(!highWindowMesh.vertices.empty());
         VOXEL_CHECK(!highWindowMesh.indices.empty());
 
+        voxel::world::NoiseTerrainSettings lowSurfaceSettings = settings;
+        lowSurfaceSettings.maxWorldY = 128.0F;
+        voxel::world::NoiseTerrainGenerator lowSurfaceGen(lowSurfaceSettings);
+        const auto groundWindowMesh = clipmapMesher.build({0, 0, 0}, lowSurfaceGen);
+        const auto emptySkyWindowMesh = clipmapMesher.build({0, 1, 0}, lowSurfaceGen);
+        VOXEL_CHECK(!groundWindowMesh.vertices.empty());
+        VOXEL_CHECK(!groundWindowMesh.indices.empty());
+        VOXEL_CHECK(emptySkyWindowMesh.vertices.empty());
+        VOXEL_CHECK(emptySkyWindowMesh.indices.empty());
+
         // World-shape prepass should expose ocean/land/biome metadata across
         // nearby deterministic sample columns without requiring full chunks.
         bool sawOceanPrepass = false;
