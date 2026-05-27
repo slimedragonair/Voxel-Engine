@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <future>
 #include <memory>
 #include <optional>
@@ -40,6 +39,7 @@
 #include <voxel/render/meshing/ClusterMeshDiskCache.hpp>
 #include <voxel/render/meshing/HybridMeshingGpuSystem.hpp>
 #include <voxel/save/RegionFileStore.hpp>
+#include <voxel/save/SaveCoordinator.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BlockEditor.hpp>
 #include <voxel/world/BlockCollisionCatalog.hpp>
@@ -187,10 +187,6 @@ private:
         core::RuntimeCounters::Timer queueWaitTime{};
     };
 
-    struct AsyncSaveJob {
-        std::future<std::size_t> future;
-    };
-
     struct PendingHybridMeshJob {
         std::optional<world::Chunk> target;
         world::ChunkCoord coord{};
@@ -234,14 +230,12 @@ private:
     [[nodiscard]] core::RuntimeCounters handleWorldInteraction();
     void invalidateLodForEditedChunk(world::ChunkCoord coord);
     void handleInventoryInteraction();
-    [[nodiscard]] core::RuntimeCounters flushPendingSaves(bool force);
     bool tryResolvePlayerSpawn();
     void updateSpaceEnvironment(core::DVec3 cameraPos);
     void updateWindowTitle();
     void updateVisualOverlay();
     void evictFarMeshCache();
     void drainOutstandingJobsForShutdown();
-    [[nodiscard]] std::size_t drainCompletedSaveJobs(bool wait);
     void updateAutomationDebug();
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingRequestsForFrame();
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingDispatchRequestsForFrame(
@@ -412,6 +406,7 @@ private:
     bool debugOverlayToggleLatch_{false};
     save::RegionFileStore saveStore_;
     save::WorldSaveService worldSaveService_;
+    save::SaveCoordinator saveCoordinator_;
     world::VoxelRaycaster raycaster_;
     world::BlockEditor blockEditor_;
     world::BlockEditQueue blockEditQueue_;
@@ -419,7 +414,6 @@ private:
     player::PlayerSpawnResolver spawnResolver_;
     player::CreativeHotbar hotbar_;
     std::unique_ptr<platform::IWindow> window_;
-    std::deque<AsyncSaveJob> asyncSaveJobs_;
     automation::NetworkGraph automationGraph_;
     physics::PhysicsSystem physics_;
     magic::MagicSystem magic_;

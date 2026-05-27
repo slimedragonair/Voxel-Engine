@@ -722,7 +722,16 @@ void Application::tick()
 
     const bool saveInterval = frameIndex_ > 0 && config_.workBudget.saveFlushIntervalFrames > 0
         && (frameIndex_ % config_.workBudget.saveFlushIntervalFrames) == 0;
-    const auto saveStats = flushPendingSaves(saveInterval);
+    const auto saveStats = saveCoordinator_.flushPending(
+        saveInterval,
+        chunks_,
+        worldSaveService_,
+        jobs_,
+        save::SaveCoordinatorSettings{
+            config_.paths.saveRoot(),
+            config_.workBudget.maxSavesPerFlush,
+            config_.workBudget.saveFlushIntervalFrames},
+        frameIndex_);
     core::mergeTimer(frameCounters.save, saveStats.save);
     frameCounters.saveQueueLength = saveStats.saveQueueLength;
     frameCounters.savesFlushed = saveStats.savesFlushed;
@@ -1452,78 +1461,6 @@ void Application::invalidateLodForEditedChunk(world::ChunkCoord coord)
     // future edit-aware clipmap target; it is intentionally not invalidated yet.
 }
 
-core::RuntimeCounters Application::flushPendingSaves(bool force)
-{
-    core::RuntimeCounters stats{};
-    stats.savesFlushed += drainCompletedSaveJobs(false);
-
-    const auto dirty = worldSaveService_.dirtyChunkCount(chunks_);
-    stats.saveQueueLength = dirty + asyncSaveJobs_.size();
-    const bool intervalDue = frameIndex_ > 0 && config_.workBudget.saveFlushIntervalFrames > 0
-        && (frameIndex_ % config_.workBudget.saveFlushIntervalFrames) == 0;
-    if (dirty == 0 || (!force && !intervalDue)) {
-        return stats;
-    }
-
-    const auto saveStart = std::chrono::steady_clock::now();
-    const auto maxSnapshots = config_.workBudget.maxSavesPerFlush;
-    std::vector<world::Chunk> snapshots;
-    snapshots.reserve(std::min(dirty, maxSnapshots));
-    chunks_.forEach([&snapshots, maxSnapshots](world::Chunk& chunk) {
-        if (snapshots.size() >= maxSnapshots || !chunk.dirty().save) {
-            return;
-        }
-        snapshots.push_back(chunk);
-        chunk.clearSaveDirty();
-    });
-    core::recordTimer(stats.save, elapsedUs(saveStart, std::chrono::steady_clock::now()));
-
-    const auto scheduled = snapshots.size();
-    if (scheduled > 0) {
-        const auto saveRoot = config_.paths.saveRoot();
-        asyncSaveJobs_.push_back({jobs_.submit({"chunk.save", core::JobPriority::Low},
-            [saveRoot, snapshots = std::move(snapshots)]() mutable {
-                save::RegionFileStore store(saveRoot);
-                std::size_t saved = 0;
-                for (const auto& snapshot : snapshots) {
-                    store.saveChunk(snapshot);
-                    ++saved;
-                }
-                return saved;
-            })});
-    }
-
-    stats.saveQueueLength = worldSaveService_.dirtyChunkCount(chunks_) + asyncSaveJobs_.size();
-    if (stats.saveQueueLength > 0) {
-        stats.saveBudgetSaturated = 1;
-    }
-    if (scheduled > 0 || stats.savesFlushed > 0) {
-        Logger::info(
-            "Save flush: scheduled_chunks=" + std::to_string(scheduled)
-            + " completed_chunks=" + std::to_string(stats.savesFlushed)
-            + " remaining=" + std::to_string(stats.saveQueueLength)
-            + (force ? " forced" : ""));
-    }
-    return stats;
-}
-
-std::size_t Application::drainCompletedSaveJobs(bool wait)
-{
-    std::size_t completed = 0;
-    auto it = asyncSaveJobs_.begin();
-    while (it != asyncSaveJobs_.end()) {
-        if (wait) {
-            it->future.wait();
-        } else if (it->future.wait_for(std::chrono::seconds{0}) != std::future_status::ready) {
-            ++it;
-            continue;
-        }
-        completed += it->future.get();
-        it = asyncSaveJobs_.erase(it);
-    }
-    return completed;
-}
-
 bool Application::tryResolvePlayerSpawn()
 {
     const auto current = player_.position();
@@ -2134,7 +2071,7 @@ void Application::evictFarMeshCache()
 void Application::drainOutstandingJobsForShutdown()
 {
     jobs_.waitAll();
-    (void)drainCompletedSaveJobs(true);
+    (void)saveCoordinator_.drainCompleted(true);
     if (pendingHybridMeshJob_) {
         chunkJobMailbox_.endMesh(world::MeshJobKey{
             pendingHybridMeshJob_->coord,
@@ -4382,7 +4319,19 @@ void Application::shutdown()
     }
 
     drainOutstandingJobsForShutdown();
-    const auto saveStats = flushPendingSaves(true);
+    auto saveStats = saveCoordinator_.flushPending(
+        true,
+        chunks_,
+        worldSaveService_,
+        jobs_,
+        save::SaveCoordinatorSettings{
+            config_.paths.saveRoot(),
+            config_.workBudget.maxSavesPerFlush,
+            config_.workBudget.saveFlushIntervalFrames},
+        frameIndex_);
+    jobs_.waitAll();
+    saveStats.savesFlushed += saveCoordinator_.drainCompleted(true);
+    saveStats.saveQueueLength = worldSaveService_.dirtyChunkCount(chunks_) + saveCoordinator_.pendingJobCount();
     if (saveStats.savesFlushed > 0) {
         runtimeStats_.recordFrame(0.0, saveStats);
     }

@@ -38,6 +38,7 @@
 #include <voxel/render/meshing/GreedyMesher.hpp>
 #include <voxel/save/PlayerInventorySaveService.hpp>
 #include <voxel/save/RegionFileStore.hpp>
+#include <voxel/save/SaveCoordinator.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BitPackedArray.hpp>
 #include <voxel/world/BlockEditor.hpp>
@@ -1212,6 +1213,53 @@ int main()
         const auto savedRest = saveService.saveDirtyChunks(saveBudgetChunks, saveStore, 8);
         VOXEL_CHECK(savedRest == 1);
         VOXEL_CHECK(saveService.dirtyChunkCount(saveBudgetChunks) == 0);
+    }
+    {
+        voxel::world::ChunkManager asyncSaveChunks;
+        const voxel::world::ChunkCoord firstCoord{220, 0, 0};
+        const voxel::world::ChunkCoord secondCoord{221, 0, 0};
+        auto& first = asyncSaveChunks.createOrGet(firstCoord);
+        auto& second = asyncSaveChunks.createOrGet(secondCoord);
+        first.markLoaded(1);
+        second.markLoaded(1);
+        first.setBlock(0, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+        second.setBlock(1, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+
+        voxel::save::WorldSaveService saveService;
+        voxel::save::SaveCoordinator coordinator;
+        voxel::core::JobSystem saveJobs;
+        saveJobs.start(1);
+        voxel::save::SaveCoordinatorSettings saveSettings{};
+        saveSettings.saveRoot = "build/test_saves/save_coordinator";
+        saveSettings.maxSavesPerFlush = 1;
+        saveSettings.saveFlushIntervalFrames = 120;
+
+        const auto idleStats = coordinator.flushPending(
+            false, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(idleStats.saveQueueLength == 2);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 0);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 2);
+
+        const auto firstFlush = coordinator.flushPending(
+            true, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(firstFlush.saveBudgetSaturated == 1);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 1);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 1);
+        saveJobs.waitAll();
+        VOXEL_CHECK(coordinator.drainCompleted(true) == 1);
+
+        const auto secondFlush = coordinator.flushPending(
+            true, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(secondFlush.saveQueueLength == 1);
+        saveJobs.waitAll();
+        VOXEL_CHECK(coordinator.drainCompleted(true) == 1);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 0);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 0);
+
+        voxel::save::RegionFileStore coordinatorStore(saveSettings.saveRoot);
+        VOXEL_CHECK(coordinatorStore.loadChunk(firstCoord).has_value());
+        VOXEL_CHECK(coordinatorStore.loadChunk(secondCoord).has_value());
+        saveJobs.stop();
     }
 
     voxel::world::ChunkManager pipelineChunks;
