@@ -1,0 +1,71 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+const uint CHUNK_SIZE = 32u;
+
+layout(std430, binding = 0) buffer TerrainBlocks {
+    uint blockState[];
+};
+
+layout(push_constant) uniform PushConstants {
+    int chunkX;
+    int chunkY;
+    int chunkZ;
+    uint seed;
+    float seaLevel;
+    float surfaceFrequency;
+    float surfaceAmplitude;
+    uint stoneBlock;
+    uint dirtBlock;
+    uint grassBlock;
+    uint waterBlock;
+    uint airBlock;
+} pc;
+
+uint hash2(int x, int z, uint seed)
+{
+    uint h = uint(x) * 374761393u + uint(z) * 668265263u + seed * 1442695041u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return h ^ (h >> 16u);
+}
+
+float valueNoise2(int x, int z, uint seed)
+{
+    return float(hash2(x, z, seed) & 0xFFFFu) / 65535.0;
+}
+
+uint localIndex(uint x, uint y, uint z)
+{
+    return x + y * CHUNK_SIZE + z * CHUNK_SIZE * CHUNK_SIZE;
+}
+
+void main()
+{
+    uvec3 local = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(local, uvec3(CHUNK_SIZE)))) {
+        return;
+    }
+
+    int worldX = pc.chunkX * int(CHUNK_SIZE) + int(local.x);
+    int worldY = pc.chunkY * int(CHUNK_SIZE) + int(local.y);
+    int worldZ = pc.chunkZ * int(CHUNK_SIZE) + int(local.z);
+
+    int sampleX = int(floor(float(worldX) * max(pc.surfaceFrequency, 0.0001)));
+    int sampleZ = int(floor(float(worldZ) * max(pc.surfaceFrequency, 0.0001)));
+    float n = valueNoise2(sampleX, sampleZ, pc.seed) * 2.0 - 1.0;
+    int surfaceY = int(floor(pc.seaLevel + n * pc.surfaceAmplitude));
+
+    uint state = pc.airBlock;
+    if (worldY < surfaceY - 3) {
+        state = pc.stoneBlock;
+    } else if (worldY < surfaceY) {
+        state = pc.dirtBlock;
+    } else if (worldY == surfaceY) {
+        state = pc.grassBlock;
+    } else if (float(worldY) <= pc.seaLevel) {
+        state = pc.waterBlock;
+    }
+
+    blockState[localIndex(local.x, local.y, local.z)] = state;
+}

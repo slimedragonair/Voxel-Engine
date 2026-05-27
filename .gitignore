@@ -1,0 +1,9 @@
+build/
+.vs/
+out/
+CMakeUserPresets.json
+*.user
+*.suo
+*.log
+saves/
+

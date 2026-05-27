@@ -1,0 +1,355 @@
+{
+  "mod_id": "core",
+  "version": "0.1.0",
+  "registries": {
+    "height_profiles": [
+      {
+        "id": "rolling_plains",
+        "terrain_class": "Plains",
+        "min_height": 18,
+        "max_height": 120,
+        "detail_scale": 0.17
+      },
+      {
+        "id": "coastal_lowlands",
+        "terrain_class": "OceanShelf",
+        "min_height": -150,
+        "max_height": 12,
+        "detail_scale": 0.06
+      },
+      {
+        "id": "deep_ocean",
+        "terrain_class": "DeepOcean",
+        "min_height": -450,
+        "max_height": -180,
+        "detail_scale": 0.11
+      },
+      {
+        "id": "abyss_trench",
+        "terrain_class": "Abyss",
+        "min_height": -820,
+        "max_height": -450,
+        "detail_scale": 0.13
+      },
+      {
+        "id": "tectonic_mountains",
+        "terrain_class": "Mountains",
+        "min_height": 260,
+        "max_height": 560,
+        "detail_scale": 0.24,
+        "ridge_scale": 1.0
+      },
+      {
+        "id": "plateau_badlands",
+        "terrain_class": "Plateau",
+        "min_height": 80,
+        "max_height": 260,
+        "detail_scale": 0.26,
+        "terrace_steps": 7,
+        "terrace_strength": 0.58
+      },
+      {
+        "id": "highlands_valley",
+        "terrain_class": "Highlands",
+        "min_height": 72,
+        "max_height": 300,
+        "detail_scale": 0.30
+      },
+      {
+        "id": "volcanic",
+        "terrain_class": "Volcanic",
+        "min_height": 58,
+        "max_height": 360,
+        "detail_scale": 0.33
+      },
+      {
+        "id": "glacial",
+        "terrain_class": "Polar",
+        "min_height": 22,
+        "max_height": 190,
+        "detail_scale": 0.13
+      },
+      {
+        "id": "floating_islands",
+        "terrain_class": "Magic",
+        "min_height": 190,
+        "max_height": 768,
+        "detail_scale": 0.24
+      },
+      {
+        "id": "crystal_caverns",
+        "terrain_class": "Underground",
+        "min_height": -1024,
+        "max_height": -80,
+        "detail_scale": 0.50
+      }
+    ],
+    "biomes": [
+      {
+        "id": "forest",
+        "display_name": "Forest",
+        "conditions": {
+          "temperature": [-0.35, 0.45],
+          "moisture": [0.12, 0.55],
+          "continentalness": [0.02, 0.75]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:dirt", "core:stone"],
+        "vegetation": ["oak_tree", "birch_tree", "wildflowers"],
+        "spawn_weight": 1.0
+      },
+      {
+        "id": "plains",
+        "display_name": "Plains",
+        "conditions": {
+          "temperature": [-0.25, 0.55],
+          "moisture": [-0.20, 0.30],
+          "continentalness": [0.02, 0.70],
+          "tectonicStress": [0.0, 0.55]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:dirt", "core:stone"],
+        "vegetation": ["grass_tuft", "wildflowers"],
+        "spawn_weight": 1.0
+      },
+      {
+        "id": "badlands_plateau",
+        "display_name": "Badlands Plateau",
+        "conditions": {
+          "temperature": [0.10, 0.85],
+          "moisture": [-1.0, -0.18],
+          "tectonicStress": [0.45, 1.0]
+        },
+        "height_profile": "plateau_badlands",
+        "surface_blocks": ["core:red_sand", "core:terracotta", "core:stone"],
+        "vegetation": ["dry_shrub"],
+        "spawn_weight": 0.55
+      },
+      {
+        "id": "lush_highlands_valley",
+        "display_name": "Lush Highlands Valley",
+        "conditions": {
+          "moisture": [0.05, 1.0],
+          "continentalness": [0.35, 1.0],
+          "tectonicStress": [0.25, 0.75]
+        },
+        "height_profile": "highlands_valley",
+        "surface_blocks": ["core:grass", "core:mossy_stone", "core:stone"],
+        "vegetation": ["pine_tree", "meadow_flowers"],
+        "spawn_weight": 0.7
+      },
+      {
+        "id": "coast",
+        "display_name": "Coast",
+        "conditions": {
+          "continentalness": [-0.12, 0.08],
+          "height": [-8, 16]
+        },
+        "height_profile": "coastal_lowlands",
+        "surface_blocks": ["core:sand", "core:gravel", "core:stone"],
+        "vegetation": ["beach_grass"],
+        "spawn_weight": 0.8
+      },
+      {
+        "id": "ocean",
+        "display_name": "Ocean",
+        "conditions": {
+          "continentalness": [-0.42, -0.12],
+          "height": [-180, -20]
+        },
+        "height_profile": "coastal_lowlands",
+        "surface_blocks": ["core:gravel", "core:stone"],
+        "vegetation": ["kelp"],
+        "spawn_weight": 1.0
+      },
+      {
+        "id": "deep_ocean",
+        "display_name": "Deep Ocean",
+        "conditions": {
+          "continentalness": [-0.76, -0.42],
+          "height": [-450, -180]
+        },
+        "height_profile": "deep_ocean",
+        "surface_blocks": ["core:gravel", "core:stone"],
+        "vegetation": ["deep_kelp"],
+        "spawn_weight": 0.8
+      },
+      {
+        "id": "ocean_abyss",
+        "display_name": "Ocean Abyss",
+        "conditions": {
+          "continentalness": [-1.0, -0.55],
+          "height": [-820, -450],
+          "oceanDepthBias": [0.45, 1.0]
+        },
+        "height_profile": "abyss_trench",
+        "surface_blocks": ["core:stone", "core:basalt"],
+        "vegetation": ["glow_fauna", "thermal_vent"],
+        "spawn_weight": 0.35
+      },
+      {
+        "id": "mountains",
+        "display_name": "Mountains",
+        "conditions": {
+          "height": [240, 620],
+          "tectonicStress": [0.70, 1.0],
+          "erosion": [-1.0, 0.52]
+        },
+        "height_profile": "tectonic_mountains",
+        "surface_blocks": ["core:stone", "core:snow"],
+        "vegetation": ["alpine_pine"],
+        "spawn_weight": 0.75
+      },
+      {
+        "id": "redwood_forest",
+        "display_name": "Redwood Forest",
+        "conditions": {
+          "temperature": [-0.10, 0.30],
+          "moisture": [0.42, 1.0],
+          "continentalness": [0.12, 0.80]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:podzol", "core:dirt"],
+        "vegetation": ["redwood_tree", "fallen_log"],
+        "spawn_weight": 0.45
+      },
+      {
+        "id": "magic_forest",
+        "display_name": "Magic Forest",
+        "conditions": {
+          "temperature": [0.35, 0.70],
+          "moisture": [0.50, 1.0],
+          "manaField": [0.60, 1.0],
+          "continentalness": [0.10, 0.80]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:mossy_stone", "core:stone"],
+        "vegetation": ["glow_tree", "arcane_flower"],
+        "spawn_weight": 0.35
+      },
+      {
+        "id": "elemental_crystal_cave",
+        "display_name": "Elemental Crystal Cave",
+        "conditions": {
+          "depth": [-1024, -80],
+          "manaField": [0.45, 1.0]
+        },
+        "height_profile": "crystal_caverns",
+        "surface_blocks": ["core:mossy_stone", "core:stone", "core:aether_crystal_ore"],
+        "vegetation": ["arcane_crystal_cluster"],
+        "spawn_weight": 0.35
+      },
+      {
+        "id": "floating_islands",
+        "display_name": "Floating Islands",
+        "conditions": {
+          "height": [190, 768],
+          "manaField": [0.68, 1.0],
+          "weirdness": [0.20, 1.0]
+        },
+        "height_profile": "floating_islands",
+        "surface_blocks": ["core:grass", "core:dirt", "core:stone"],
+        "vegetation": ["sky_flower", "wind_tree"],
+        "spawn_weight": 0.20
+      },
+      {
+        "id": "swamp",
+        "display_name": "Swamp",
+        "conditions": {
+          "height": [-4, 24],
+          "moisture": [0.55, 1.0],
+          "temperature": [-0.10, 0.70]
+        },
+        "height_profile": "coastal_lowlands",
+        "surface_blocks": ["core:grass", "core:mossy_stone", "core:dirt"],
+        "vegetation": ["swamp_tree", "alchemy_plant"],
+        "spawn_weight": 0.55
+      },
+      {
+        "id": "tundra",
+        "display_name": "Tundra",
+        "conditions": {
+          "temperature": [-1.0, -0.52],
+          "polarInfluence": [0.20, 1.0]
+        },
+        "height_profile": "glacial",
+        "surface_blocks": ["core:snow", "core:dirt", "core:stone"],
+        "vegetation": ["frozen_shrub"],
+        "spawn_weight": 0.55
+      },
+      {
+        "id": "jungle",
+        "display_name": "Jungle",
+        "conditions": {
+          "temperature": [0.50, 1.0],
+          "moisture": [0.42, 1.0],
+          "continentalness": [0.04, 0.80]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:mossy_stone", "core:dirt"],
+        "vegetation": ["jungle_tree", "vines", "ruins"],
+        "spawn_weight": 0.65
+      },
+      {
+        "id": "volcanic",
+        "display_name": "Volcanic",
+        "conditions": {
+          "volcanism": [0.72, 1.0],
+          "tectonicStress": [0.40, 1.0]
+        },
+        "height_profile": "volcanic",
+        "surface_blocks": ["core:basalt", "core:stone"],
+        "vegetation": ["ash_vent"],
+        "spawn_weight": 0.35
+      },
+      {
+        "id": "savanna",
+        "display_name": "Savanna",
+        "conditions": {
+          "temperature": [0.35, 0.85],
+          "moisture": [-0.40, -0.10]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:grass", "core:dirt", "core:stone"],
+        "vegetation": ["acacia_tree", "dry_grass"],
+        "spawn_weight": 0.70
+      },
+      {
+        "id": "desert",
+        "display_name": "Desert",
+        "conditions": {
+          "temperature": [0.25, 1.0],
+          "moisture": [-1.0, -0.52]
+        },
+        "height_profile": "rolling_plains",
+        "surface_blocks": ["core:sand", "core:sandstone", "core:stone"],
+        "vegetation": ["cactus", "oasis_palm"],
+        "spawn_weight": 0.65
+      },
+      {
+        "id": "ice_caps",
+        "display_name": "Ice Caps",
+        "conditions": {
+          "temperature": [-1.0, -0.72],
+          "polarInfluence": [0.82, 1.0]
+        },
+        "height_profile": "glacial",
+        "surface_blocks": ["core:ice", "core:snow", "core:stone"],
+        "vegetation": ["ice_spike"],
+        "spawn_weight": 0.35
+      },
+      {
+        "id": "arcane_fracture_zone",
+        "display_name": "Arcane Fracture Zone",
+        "conditions": {
+          "manaField": [0.82, 1.0],
+          "weirdness": [0.42, 1.0]
+        },
+        "height_profile": "floating_islands",
+        "surface_blocks": ["core:basalt", "core:mossy_stone", "core:aether_crystal_ore"],
+        "vegetation": ["floating_debris", "arcane_storm_node"],
+        "spawn_weight": 0.15
+      }
+    ]
+  }
+}

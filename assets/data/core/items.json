@@ -1,0 +1,199 @@
+{
+  "mod_id": "core",
+  "version": "0.1.0",
+  "registries": {
+    "items": [
+      {
+        "id": "core:stone",
+        "display_name": "Stone",
+        "max_stack_size": 999,
+        "tags": ["terrain", "solid"],
+        "block_placement_id": "core:stone"
+      },
+      {
+        "id": "core:dirt",
+        "display_name": "Dirt",
+        "max_stack_size": 999,
+        "tags": ["terrain", "soil"],
+        "block_placement_id": "core:dirt"
+      },
+      {
+        "id": "core:grass_block",
+        "display_name": "Grass Block",
+        "max_stack_size": 999,
+        "tags": ["terrain", "surface"],
+        "block_placement_id": "core:grass"
+      },
+      {
+        "id": "core:oak_log",
+        "display_name": "Oak Log",
+        "max_stack_size": 999,
+        "tags": ["terrain", "wood"],
+        "block_placement_id": "core:oak_log"
+      },
+      {
+        "id": "core:glass",
+        "display_name": "Glass",
+        "max_stack_size": 999,
+        "tags": ["glass", "transparent"],
+        "block_placement_id": "core:glass"
+      },
+      {
+        "id": "core:torch",
+        "display_name": "Torch",
+        "max_stack_size": 250,
+        "tags": ["light", "decoration"],
+        "block_placement_id": "core:torch"
+      },
+      {
+        "id": "core:coal",
+        "display_name": "Coal",
+        "max_stack_size": 500,
+        "tags": ["resource", "fuel"]
+      },
+      {
+        "id": "core:coal_ore",
+        "display_name": "Coal Ore",
+        "max_stack_size": 999,
+        "tags": ["terrain", "ore", "coal"],
+        "block_placement_id": "core:coal_ore"
+      },
+      {
+        "id": "core:iron_ore",
+        "display_name": "Iron Ore",
+        "max_stack_size": 999,
+        "tags": ["terrain", "ore", "iron"],
+        "block_placement_id": "core:iron_ore"
+      },
+      {
+        "id": "core:iron_ingot",
+        "display_name": "Iron Ingot",
+        "max_stack_size": 500,
+        "tags": ["resource", "metal"]
+      },
+      {
+        "id": "core:copper_ingot",
+        "display_name": "Copper Ingot",
+        "max_stack_size": 500,
+        "tags": ["resource", "metal"]
+      },
+      {
+        "id": "core:wooden_gear_item",
+        "display_name": "Wooden Gear",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "gear"],
+        "block_placement_id": "core:wooden_gear"
+      },
+      {
+        "id": "core:creative_motor_item",
+        "display_name": "Creative Motor",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "source"],
+        "block_placement_id": "core:creative_motor"
+      },
+      {
+        "id": "core:mechanical_press_item",
+        "display_name": "Mechanical Press",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "consumer"],
+        "block_placement_id": "core:mechanical_press"
+      },
+      {
+        "id": "core:copper_pipe_item",
+        "display_name": "Copper Pipe",
+        "max_stack_size": 64,
+        "tags": ["pipe", "automation"],
+        "block_placement_id": "core:copper_pipe"
+      },
+      {
+        "id": "core:crafting_table_item",
+        "display_name": "Crafting Table",
+        "max_stack_size": 64,
+        "tags": ["crafting", "workstation"],
+        "block_placement_id": "core:crafting_table"
+      },
+      {
+        "id": "core:wooden_pickaxe",
+        "display_name": "Wooden Pickaxe",
+        "max_stack_size": 1,
+        "tags": ["tool", "pickaxe"],
+        "tool_type": "pickaxe",
+        "durability": 120
+      },
+      {
+        "id": "core:belt_item",
+        "display_name": "Belt",
+        "max_stack_size": 64,
+        "tags": ["logistics", "belt"],
+        "block_placement_id": "core:belt"
+      },
+      {
+        "id": "core:gearbox_item",
+        "display_name": "Gearbox",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "gear"],
+        "block_placement_id": "core:gearbox"
+      },
+      {
+        "id": "core:clutch_item",
+        "display_name": "Clutch",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "transfer"],
+        "block_placement_id": "core:clutch"
+      },
+      {
+        "id": "core:millstone_item",
+        "display_name": "Millstone",
+        "max_stack_size": 64,
+        "tags": ["kinetic", "consumer", "machine"],
+        "block_placement_id": "core:millstone"
+      },
+      {
+        "id": "core:space_rock",
+        "display_name": "Space Rock",
+        "max_stack_size": 999,
+        "tags": ["space", "asteroid", "terrain", "solid"],
+        "block_placement_id": "core:space_rock"
+      },
+      {
+        "id": "core:rich_metal_ore",
+        "display_name": "Rich Metal Ore",
+        "max_stack_size": 999,
+        "tags": ["space", "asteroid", "ore", "metal"],
+        "block_placement_id": "core:rich_metal_ore"
+      },
+      {
+        "id": "core:aether_crystal_ore",
+        "display_name": "Aether Crystal Ore",
+        "max_stack_size": 999,
+        "tags": ["space", "asteroid", "ore", "crystal"],
+        "block_placement_id": "core:aether_crystal_ore"
+      },
+      {
+        "id": "core:compressed_ice",
+        "display_name": "Compressed Ice",
+        "max_stack_size": 999,
+        "tags": ["space", "asteroid", "ice", "cold"],
+        "block_placement_id": "core:compressed_ice"
+      },
+      {
+        "id": "core:aether_crystal",
+        "display_name": "Aether Crystal",
+        "max_stack_size": 500,
+        "tags": ["space", "resource", "crystal", "magic"]
+      },
+      {
+        "id": "core:space_alloy_ingot",
+        "display_name": "Space Alloy Ingot",
+        "max_stack_size": 500,
+        "tags": ["space", "resource", "metal"]
+      },
+      {
+        "id": "core:cryo_ice",
+        "display_name": "Cryo Ice",
+        "max_stack_size": 500,
+        "tags": ["space", "resource", "ice", "cold"]
+      }
+    ]
+  }
+}

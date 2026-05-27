@@ -1,0 +1,216 @@
+{
+  "mod_id": "core",
+  "version": "0.1.0",
+  "registries": {
+    "recipes": [
+      {
+        "id": "core:torch_from_coal",
+        "display_name": "Torch",
+        "inputs": [
+          {"item": "core:coal", "count": 1},
+          {"item": "core:oak_log", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:torch", "count": 4}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:crafting_table",
+        "display_name": "Crafting Table",
+        "inputs": [
+          {"item": "core:oak_log", "count": 4}
+        ],
+        "outputs": [
+          {"item": "core:crafting_table_item", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:wooden_gear",
+        "display_name": "Wooden Gear",
+        "inputs": [
+          {"item": "core:oak_log", "count": 2}
+        ],
+        "outputs": [
+          {"item": "core:wooden_gear_item", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:copper_pipe",
+        "display_name": "Copper Pipe",
+        "inputs": [
+          {"item": "core:copper_ingot", "count": 3}
+        ],
+        "outputs": [
+          {"item": "core:copper_pipe_item", "count": 2}
+        ],
+        "duration_ticks": 60,
+        "tier": "machine",
+        "machine_category": "press"
+      },
+      {
+        "id": "core:coal_from_ore",
+        "display_name": "Coal",
+        "inputs": [
+          {"item": "core:stone", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:coal", "count": 1}
+        ],
+        "duration_ticks": 120,
+        "tier": "machine",
+        "machine_category": "press",
+        "hidden": true
+      },
+      {
+        "id": "core:wooden_pickaxe",
+        "display_name": "Wooden Pickaxe",
+        "inputs": [
+          {"item": "core:oak_log", "count": 3}
+        ],
+        "outputs": [
+          {"item": "core:wooden_pickaxe", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:belt",
+        "display_name": "Belt",
+        "inputs": [
+          {"item": "core:oak_log", "count": 2},
+          {"item": "core:wooden_gear_item", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:belt_item", "count": 2}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:gearbox",
+        "display_name": "Gearbox",
+        "inputs": [
+          {"item": "core:wooden_gear_item", "count": 2},
+          {"item": "core:oak_log", "count": 3}
+        ],
+        "outputs": [
+          {"item": "core:gearbox_item", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:clutch",
+        "display_name": "Clutch",
+        "inputs": [
+          {"item": "core:wooden_gear_item", "count": 1},
+          {"item": "core:iron_ingot", "count": 2}
+        ],
+        "outputs": [
+          {"item": "core:clutch_item", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:mechanical_press_item",
+        "display_name": "Mechanical Press",
+        "inputs": [
+          {"item": "core:iron_ingot", "count": 4},
+          {"item": "core:wooden_gear_item", "count": 2}
+        ],
+        "outputs": [
+          {"item": "core:mechanical_press_item", "count": 1}
+        ],
+        "duration_ticks": 1,
+        "tier": "hand"
+      },
+      {
+        "id": "core:millstone_grind_ore",
+        "display_name": "Grind Ore",
+        "inputs": [
+          {"item": "core:coal_ore", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:coal", "count": 2}
+        ],
+        "duration_ticks": 80,
+        "tier": "machine",
+        "machine_category": "mill"
+      },
+      {
+        "id": "core:millstone_grind_iron",
+        "display_name": "Grind Iron Ore",
+        "inputs": [
+          {"item": "core:iron_ore", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:iron_ingot", "count": 1}
+        ],
+        "duration_ticks": 120,
+        "tier": "machine",
+        "machine_category": "mill"
+      },
+      {
+        "id": "core:millstone_process_rich_metal",
+        "display_name": "Process Rich Metal Ore",
+        "inputs": [
+          {"item": "core:rich_metal_ore", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:iron_ingot", "count": 3},
+          {"item": "core:copper_ingot", "count": 1}
+        ],
+        "duration_ticks": 160,
+        "tier": "machine",
+        "machine_category": "mill"
+      },
+      {
+        "id": "core:millstone_extract_aether_crystal",
+        "display_name": "Extract Aether Crystal",
+        "inputs": [
+          {"item": "core:aether_crystal_ore", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:aether_crystal", "count": 2}
+        ],
+        "duration_ticks": 180,
+        "tier": "machine",
+        "machine_category": "mill"
+      },
+      {
+        "id": "core:millstone_crush_compressed_ice",
+        "display_name": "Crush Compressed Ice",
+        "inputs": [
+          {"item": "core:compressed_ice", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:cryo_ice", "count": 4}
+        ],
+        "duration_ticks": 100,
+        "tier": "machine",
+        "machine_category": "mill"
+      },
+      {
+        "id": "core:press_space_alloy",
+        "display_name": "Press Space Alloy",
+        "inputs": [
+          {"item": "core:rich_metal_ore", "count": 2},
+          {"item": "core:aether_crystal", "count": 1}
+        ],
+        "outputs": [
+          {"item": "core:space_alloy_ingot", "count": 1}
+        ],
+        "duration_ticks": 180,
+        "tier": "machine",
+        "machine_category": "press"
+      }
+    ]
+  }
+}

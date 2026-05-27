@@ -1,0 +1,152 @@
+#version 450
+
+// LOD2 cluster face classifier.
+//
+// Mirror of mesh_face_classify.comp but for the half-resolution cluster
+// supervoxel grid (64×64×64) with 1 supervoxel of padding on each side
+// for cluster-boundary neighbor lookup → 66×66×66 input grid.
+//
+// Each thread classifies one supervoxel: checks 6 neighbours, emits a
+// FaceRecord per visible face. The CPU side then runs greedy merge over
+// the face list to produce the final cluster mesh.
+//
+// Differences from chunk classifier:
+//   - No static-water suppression — LOD2 doesn't render the water
+//     surface separately at distance.
+//   - Honors the Unknown cell flag (bit 2). Unknown cells emit nothing
+//     and suppress face emission against them (matches the CPU mesher's
+//     ClusterCell::isUnknown logic).
+//   - faceIndex is packed in the low bits of localFace; the cell coord
+//     is stored as a flat 0..262143 index into the 64³ supervoxel grid.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+const uint SUPERVOXEL_SIZE = 64u;
+const uint PADDED_SIZE     = 66u;
+const uint FLAG_OCCLUDES = 1u << 0;
+const uint FLAG_FLUID    = 1u << 1;
+const uint FLAG_UNKNOWN  = 1u << 2;
+const uint SURFACE_SHIFT = 8u;
+const uint SURFACE_MASK  = 3u;
+
+struct CellInfo {
+    uint materialId;
+    uint flags;
+    uint packedLight;
+    uint pad;
+};
+
+struct FaceRecord {
+    uint localFace;    // (cellIndex & 0xFFFF) | (faceIndex << 16)
+    uint materialId;
+    uint packedLight;
+    uint surface;
+};
+
+layout(std430, binding = 0) readonly buffer CellBuffer {
+    CellInfo cells[];
+};
+
+layout(std430, binding = 1) buffer FaceBuffer {
+    uint count;
+    uint maxFaces;
+    uint pad0;
+    uint pad1;
+    FaceRecord records[];
+};
+
+uint paddedIndex(uint x, uint y, uint z)
+{
+    return x + y * PADDED_SIZE + z * PADDED_SIZE * PADDED_SIZE;
+}
+
+uint localIndex(uint x, uint y, uint z)
+{
+    return x + y * SUPERVOXEL_SIZE + z * SUPERVOXEL_SIZE * SUPERVOXEL_SIZE;
+}
+
+bool isFluid(CellInfo c)    { return (c.flags & FLAG_FLUID)    != 0u; }
+bool occludes(CellInfo c)   { return (c.flags & FLAG_OCCLUDES) != 0u; }
+bool isUnknown(CellInfo c)  { return (c.flags & FLAG_UNKNOWN)  != 0u; }
+uint surfaceOf(CellInfo c)  { return (c.flags >> SURFACE_SHIFT) & SURFACE_MASK; }
+
+uint shadeForFace(uint face)
+{
+    if (face == 2u) return 255u;
+    if (face == 3u) return 120u;
+    if (face == 0u || face == 1u) return 165u;
+    return 190u;
+}
+
+bool visibleAgainst(CellInfo currentCell, CellInfo neighborCell)
+{
+    // Unknown cells emit nothing and suppress neighbor faces. The CPU
+    // mesher does the same (see ClusterMesher.cpp's isUnknown checks):
+    // a missing-chunk supervoxel can't tell us whether a face should
+    // be emitted, so we conservatively skip.
+    if (isUnknown(currentCell)) return false;
+    if (isUnknown(neighborCell)) return false;
+
+    if (currentCell.materialId == 0u) return false;
+    if (neighborCell.materialId == 0u) return true;
+    if (isFluid(currentCell) && isFluid(neighborCell)
+        && currentCell.materialId == neighborCell.materialId) {
+        return false;
+    }
+    return !occludes(neighborCell);
+}
+
+void appendFace(uint cellIdx, uint face, CellInfo currentCell)
+{
+    uint outIndex = atomicAdd(count, 1u);
+    if (outIndex >= maxFaces) {
+        return;
+    }
+    // cellIdx is 0..262143 (fits in 18 bits). faceIndex 0..5 in next 3
+    // bits. We pack them into a single uint, which the CPU side
+    // unpacks to figure out the supervoxel coord and which face.
+    records[outIndex].localFace  = cellIdx | (face << 24u);
+    records[outIndex].materialId = currentCell.materialId;
+    records[outIndex].packedLight = currentCell.packedLight != 0u
+        ? currentCell.packedLight
+        : shadeForFace(face);
+    records[outIndex].surface = surfaceOf(currentCell);
+}
+
+void main()
+{
+    uvec3 local = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(local, uvec3(SUPERVOXEL_SIZE)))) {
+        return;
+    }
+
+    // Padded grid offset: cluster interior occupies [1, 1, 1] .. [64, 64, 64]
+    // in padded coords, with one cell of border for cross-cluster neighbor
+    // info (currently all-zero; cross-cluster culling is Phase 1B+1).
+    uvec3 p = local + uvec3(1u);
+    CellInfo currentCell = cells[paddedIndex(p.x, p.y, p.z)];
+    if (currentCell.materialId == 0u || isUnknown(currentCell)) {
+        return;
+    }
+
+    uint cellIdx = localIndex(local.x, local.y, local.z);
+
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x + 1u, p.y, p.z)])) {
+        appendFace(cellIdx, 0u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x - 1u, p.y, p.z)])) {
+        appendFace(cellIdx, 1u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y + 1u, p.z)])) {
+        appendFace(cellIdx, 2u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y - 1u, p.z)])) {
+        appendFace(cellIdx, 3u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y, p.z + 1u)])) {
+        appendFace(cellIdx, 4u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y, p.z - 1u)])) {
+        appendFace(cellIdx, 5u, currentCell);
+    }
+}

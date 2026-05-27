@@ -1,0 +1,152 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+const uint CHUNK_SIZE = 32u;
+const uint PADDED_SIZE = 34u;
+const uint FLAG_OCCLUDES = 1u << 0;
+const uint FLAG_FLUID = 1u << 1;
+const uint SURFACE_SHIFT = 8u;
+const uint SURFACE_MASK = 3u;
+
+struct CellInfo {
+    uint materialId;
+    uint flags;
+    uint packedLight;
+    uint pad;
+};
+
+struct FaceRecord {
+    uint localFace;
+    uint materialId;
+    uint packedLight;
+    uint surface;
+};
+
+layout(std430, binding = 0) readonly buffer CellBuffer {
+    CellInfo cells[];
+};
+
+layout(std430, binding = 1) buffer FaceBuffer {
+    uint count;
+    uint maxFaces;
+    uint pad0;
+    uint pad1;
+    FaceRecord records[];
+};
+
+layout(push_constant) uniform PushConstants {
+    int chunkBaseY;
+    int staticWaterSurfaceY;
+    uint suppressStaticWater;
+    uint reserved0;
+} pc;
+
+uint paddedIndex(uint x, uint y, uint z)
+{
+    return x + y * PADDED_SIZE + z * PADDED_SIZE * PADDED_SIZE;
+}
+
+uint localIndex(uint x, uint y, uint z)
+{
+    return x + y * CHUNK_SIZE + z * CHUNK_SIZE * CHUNK_SIZE;
+}
+
+bool isFluid(CellInfo c)
+{
+    return (c.flags & FLAG_FLUID) != 0u;
+}
+
+bool occludes(CellInfo c)
+{
+    return (c.flags & FLAG_OCCLUDES) != 0u;
+}
+
+uint surfaceOf(CellInfo c)
+{
+    return (c.flags >> SURFACE_SHIFT) & SURFACE_MASK;
+}
+
+uint shadeForFace(uint face)
+{
+    if (face == 2u) {
+        return 255u;
+    }
+    if (face == 3u) {
+        return 120u;
+    }
+    if (face == 0u || face == 1u) {
+        return 165u;
+    }
+    return 190u;
+}
+
+bool visibleAgainst(CellInfo currentCell, CellInfo neighborCell, uint face, uint y)
+{
+    if (currentCell.materialId == 0u) {
+        return false;
+    }
+    if (pc.suppressStaticWater != 0u && isFluid(currentCell) && face == 2u) {
+        int worldFaceY = pc.chunkBaseY + int(y) + 1;
+        if (worldFaceY <= pc.staticWaterSurfaceY) {
+            return false;
+        }
+    }
+    if (neighborCell.materialId == 0u) {
+        return true;
+    }
+    if (isFluid(currentCell) && isFluid(neighborCell)
+        && currentCell.materialId == neighborCell.materialId) {
+        return false;
+    }
+    return !occludes(neighborCell);
+}
+
+void appendFace(uint idx, uint face, CellInfo currentCell)
+{
+    uint outIndex = atomicAdd(count, 1u);
+    if (outIndex >= maxFaces) {
+        return;
+    }
+    records[outIndex].localFace = idx | (face << 16u);
+    records[outIndex].materialId = currentCell.materialId;
+    records[outIndex].packedLight = currentCell.packedLight != 0u
+        ? currentCell.packedLight
+        : shadeForFace(face);
+    records[outIndex].surface = surfaceOf(currentCell);
+}
+
+void main()
+{
+    uvec3 local = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(local, uvec3(CHUNK_SIZE)))) {
+        return;
+    }
+
+    uvec3 p = local + uvec3(1u);
+    CellInfo currentCell = cells[paddedIndex(p.x, p.y, p.z)];
+    if (currentCell.materialId == 0u) {
+        return;
+    }
+
+    uint idx = localIndex(local.x, local.y, local.z);
+
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x + 1u, p.y, p.z)], 0u, local.y)) {
+        appendFace(idx, 0u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x - 1u, p.y, p.z)], 1u, local.y)) {
+        appendFace(idx, 1u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y + 1u, p.z)], 2u, local.y)) {
+        appendFace(idx, 2u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y - 1u, p.z)], 3u, local.y)) {
+        appendFace(idx, 3u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y, p.z + 1u)], 4u, local.y)) {
+        appendFace(idx, 4u, currentCell);
+    }
+    if (visibleAgainst(currentCell, cells[paddedIndex(p.x, p.y, p.z - 1u)], 5u, local.y)) {
+        appendFace(idx, 5u, currentCell);
+    }
+}

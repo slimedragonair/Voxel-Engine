@@ -1,0 +1,172 @@
+#version 450
+
+// Falling-water fluid simulation. See docs/gpu_fluid_sim_design.md.
+//
+// One dispatch per active fluid chunk slot. The workgroup grid is 4x4x4 and
+// each workgroup is 8x8x8 threads, so 64 workgroups cover the full 32x32x32
+// chunk volume. Each thread inspects one cell.
+//
+// Memory model: the slot pool and block-bits buffers are READ-ONLY this pass.
+// The shader only emits "change events" via atomicAdd on the event counter;
+// the CPU consumes events next frame and applies them via the existing
+// `setBlockSilently` / `markMeshDirty` paths. This avoids the need for
+// double-buffered slot writes and keeps the data flow strictly one-way.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// ---- Storage buffer bindings (must match FluidGpuSystem descriptor set) ----
+
+// Slot pool: 1 byte per cell, packed 4 cells per uint32 to fit std430.
+// Slot i starts at uint index `i * kUintsPerCellSlot`.
+layout(set = 0, binding = 0, std430) readonly buffer SlotPool {
+    uint cells[];
+} slots;
+
+// Block bits: 2 bits per cell (00=air, 01=water, 10=solid, 11=reserved),
+// packed 16 cells per uint32. Used to decide where water can fall into.
+layout(set = 0, binding = 1, std430) readonly buffer BlockBits {
+    uint bits[];
+} blocks;
+
+// Event entries written by the shader for CPU consumption.
+struct FluidEvent {
+    uint packedCellAndType; // [type:4][slotIdx:12][localIdx:16]
+    uint newCellByte;       // packed cell byte (level/falling/oceanLocked)
+};
+layout(set = 0, binding = 2, std430) buffer EventBuffer {
+    uint count;     // atomic counter (CPU clears before dispatch)
+    uint pad0;
+    uint pad1;
+    uint pad2;
+    FluidEvent entries[];
+} events;
+
+// Push constants: which slot is being processed and the slot indices for
+// the 6 face neighbours (or kInvalidSlot if the neighbour isn't loaded).
+layout(push_constant) uniform Push {
+    uint currentSlot;
+    uint negXSlot;
+    uint posXSlot;
+    uint negYSlot;
+    uint posYSlot;
+    uint negZSlot;
+    uint posZSlot;
+    uint maxEvents;
+} push;
+
+// ---- Constants ----
+
+const uint kInvalidSlot = 0xFFFFFFFFu;
+
+// Cell byte packing (matches ChunkFluidData):
+const uint kLevelMask = 0xFu;
+const uint kFallingBit = 0x10u;
+const uint kOceanLockedBit = 0x20u;
+
+// Block-bit values:
+const uint kBlockAir = 0u;
+const uint kBlockWater = 1u;
+const uint kBlockSolid = 2u;
+
+// Event types:
+const uint kEventDrained = 0u;
+const uint kEventCarvedFalling = 1u;
+const uint kEventLevelChanged = 2u;
+
+const uint kChunkDim = 32u;
+const uint kCellsPerSlot = kChunkDim * kChunkDim * kChunkDim; // 32768
+const uint kUintsPerCellSlot = kCellsPerSlot / 4u;            // 8192
+const uint kUintsPerBlockSlot = kCellsPerSlot / 16u;          // 2048
+
+// ---- Helpers ----
+
+uint localIndex(uvec3 c) {
+    return c.x + c.y * kChunkDim + c.z * kChunkDim * kChunkDim;
+}
+
+// Read a single cell byte from `slotIdx` at local cell index `localIdx`.
+// Invalid slot (unloaded neighbour) is treated as "all air with no fluid".
+uint readCell(uint slotIdx, uint localIdx) {
+    if (slotIdx == kInvalidSlot) return 0u;
+    uint base = slotIdx * kUintsPerCellSlot;
+    uint word = slots.cells[base + (localIdx >> 2)];
+    uint shift = (localIdx & 3u) * 8u;
+    return (word >> shift) & 0xFFu;
+}
+
+// Read block-bit value (air/water/solid) for cell at `slotIdx`/`localIdx`.
+uint readBlock(uint slotIdx, uint localIdx) {
+    if (slotIdx == kInvalidSlot) return kBlockAir;
+    uint base = slotIdx * kUintsPerBlockSlot;
+    uint word = blocks.bits[base + (localIdx >> 4)];
+    uint shift = (localIdx & 15u) * 2u;
+    return (word >> shift) & 3u;
+}
+
+// Pack event metadata. Type in high 4 bits, slot in middle 12, local index
+// in low 16. localIdx fits in 15 bits (32768 = 2^15) so this packing is
+// unambiguous.
+uint packEvent(uint type, uint slotIdx, uint localIdx) {
+    return ((type & 0xFu) << 28) | ((slotIdx & 0xFFFu) << 16) | (localIdx & 0xFFFFu);
+}
+
+// Atomically append one event to the buffer. Drops the event if the buffer
+// is full (CPU will see the overflow next frame and re-dispatch).
+void appendEvent(uint type, uint slotIdx, uint localIdx, uint newCellByte) {
+    uint idx = atomicAdd(events.count, 1u);
+    if (idx >= push.maxEvents) return;
+    events.entries[idx].packedCellAndType = packEvent(type, slotIdx, localIdx);
+    events.entries[idx].newCellByte = newCellByte;
+}
+
+// ---- Main ----
+
+void main() {
+    uvec3 cell = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(cell, uvec3(kChunkDim)))) {
+        return;
+    }
+    uint localIdx = localIndex(cell);
+
+    // This pass only acts on water cells.
+    uint block = readBlock(push.currentSlot, localIdx);
+    if (block != kBlockWater) {
+        return;
+    }
+
+    uint cellByte = readCell(push.currentSlot, localIdx);
+
+    // Skip cells already falling — they handled themselves the tick they were
+    // carved. Locked ocean stays still until BFS unlocks it on CPU.
+    if ((cellByte & kFallingBit) != 0u) return;
+    if ((cellByte & kOceanLockedBit) != 0u) return;
+
+    // Find the cell below. If y==0, cross into the -Y neighbour at y=31.
+    uvec3 belowCell = cell;
+    uint belowSlot;
+    if (cell.y == 0u) {
+        belowSlot = push.negYSlot;
+        belowCell.y = kChunkDim - 1u;
+    } else {
+        belowSlot = push.currentSlot;
+        belowCell.y -= 1u;
+    }
+
+    // Bail if the neighbour chunk isn't loaded — main thread will retry once
+    // it streams in.
+    if (belowSlot == kInvalidSlot) return;
+
+    uint belowIdx = localIndex(belowCell);
+    uint belowBlock = readBlock(belowSlot, belowIdx);
+
+    // Water only falls into air. Solid blocks the flow; water already there
+    // means we don't need to do anything.
+    if (belowBlock != kBlockAir) return;
+
+    // Emit a "carve falling water into cell-below" event. The CPU will:
+    //   - setBlockSilently(belowCell, water)
+    //   - update the fluid data byte at belowCell to {level=0, falling=1, ocean=0}
+    //   - markMeshDirty for belowSlot's chunk
+    uint newCellByte = kFallingBit; // level=0, falling=true, ocean=false
+    appendEvent(kEventCarvedFalling, belowSlot, belowIdx, newCellByte);
+}

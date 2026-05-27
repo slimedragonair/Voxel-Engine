@@ -1,0 +1,403 @@
+{
+  "mod_id": "core",
+  "version": "0.2.0",
+  "registries": {
+    "blocks": [
+      {
+        "id": "core:air",
+        "display_name": "Air",
+        "solid": false,
+        "opaque": false,
+        "render_surface": "transparent",
+        "tags": ["air"]
+      },
+      {
+        "id": "core:stone",
+        "display_name": "Stone",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "solid"]
+      },
+      {
+        "id": "core:glass",
+        "display_name": "Glass",
+        "solid": true,
+        "opaque": false,
+        "render_surface": "transparent",
+        "states": {
+          "waterlogged": [false, true]
+        },
+        "tags": ["glass", "transparent"]
+      },
+      {
+        "id": "core:copper_pipe",
+        "display_name": "Copper Pipe",
+        "solid": true,
+        "opaque": false,
+        "render_surface": "cutout",
+        "states": {
+          "axis": ["x", "y", "z"],
+          "powered": [false, true]
+        },
+        "has_block_entity": true,
+        "block_entity_type": "pipe",
+        "tags": ["pipe", "automation"]
+      },
+      {
+        "id": "core:creative_motor",
+        "display_name": "Creative Motor",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "source",
+          "source_rpm": 32,
+          "stress_capacity": 64,
+          "stress_demand": 0,
+          "gear_ratio": 1,
+          "breaks_on_overload": false,
+          "axis_aware": true
+        },
+        "has_block_entity": true,
+        "block_entity_type": "kinetic_source",
+        "tags": ["kinetic", "source"]
+      },
+      {
+        "id": "core:wooden_gear",
+        "display_name": "Wooden Gear",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "transfer",
+          "source_rpm": 0,
+          "stress_capacity": 16,
+          "stress_demand": 0,
+          "gear_ratio": 1,
+          "breaks_on_overload": true,
+          "axis_aware": true
+        },
+        "tags": ["kinetic", "gear"]
+      },
+      {
+        "id": "core:mechanical_press",
+        "display_name": "Mechanical Press",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"],
+          "powered": [false, true]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "consumer",
+          "source_rpm": 0,
+          "stress_capacity": 0,
+          "stress_demand": 24,
+          "gear_ratio": 1,
+          "breaks_on_overload": true,
+          "axis_aware": true
+        },
+        "has_block_entity": true,
+        "block_entity_type": "machine",
+        "inventory_slots": 2,
+        "recipe_category": "press",
+        "tags": ["kinetic", "consumer"]
+      },
+      {
+        "id": "core:dirt",
+        "display_name": "Dirt",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "soil"]
+      },
+      {
+        "id": "core:grass",
+        "display_name": "Grass Block",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "surface"]
+      },
+      {
+        "id": "core:coal_ore",
+        "display_name": "Coal Ore",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "ore", "coal"]
+      },
+      {
+        "id": "core:iron_ore",
+        "display_name": "Iron Ore",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "ore", "iron"]
+      },
+      {
+        "id": "core:water",
+        "display_name": "Water",
+        "solid": false,
+        "opaque": false,
+        "render_surface": "transparent",
+        "light_attenuation": 1,
+        "tags": ["fluid", "water"]
+      },
+      {
+        "id": "core:oak_log",
+        "display_name": "Oak Log",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "tags": ["terrain", "wood"]
+      },
+      {
+        "id": "core:crafting_table",
+        "display_name": "Crafting Table",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "has_block_entity": true,
+        "block_entity_type": "crafting_station",
+        "inventory_slots": 9,
+        "recipe_category": "hand",
+        "tags": ["crafting", "workstation"]
+      },
+      {
+        "id": "core:torch",
+        "display_name": "Torch",
+        "solid": false,
+        "opaque": false,
+        "render_surface": "cutout",
+        "light_emission": 14,
+        "light_attenuation": 0,
+        "tags": ["light", "decoration"]
+      },
+      {
+        "id": "core:belt",
+        "display_name": "Belt",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "has_block_entity": true,
+        "block_entity_type": "belt",
+        "tags": ["logistics", "belt"]
+      },
+      {
+        "id": "core:gearbox",
+        "display_name": "Gearbox",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "transfer",
+          "source_rpm": 0,
+          "stress_capacity": 32,
+          "stress_demand": 0,
+          "gear_ratio": 2,
+          "breaks_on_overload": true,
+          "axis_aware": true
+        },
+        "has_block_entity": true,
+        "block_entity_type": "gearbox",
+        "tags": ["kinetic", "gear", "transfer"]
+      },
+      {
+        "id": "core:clutch",
+        "display_name": "Clutch",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"],
+          "powered": [false, true]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "transfer",
+          "source_rpm": 0,
+          "stress_capacity": 48,
+          "stress_demand": 0,
+          "gear_ratio": 1,
+          "breaks_on_overload": false,
+          "axis_aware": true
+        },
+        "has_block_entity": true,
+        "block_entity_type": "clutch",
+        "tags": ["kinetic", "transfer", "clutch"]
+      },
+      {
+        "id": "core:millstone",
+        "display_name": "Millstone",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "states": {
+          "axis": ["x", "y", "z"]
+        },
+        "kinetic": {
+          "enabled": true,
+          "role": "consumer",
+          "source_rpm": 0,
+          "stress_capacity": 0,
+          "stress_demand": 16,
+          "gear_ratio": 1,
+          "breaks_on_overload": true,
+          "axis_aware": true
+        },
+        "has_block_entity": true,
+        "block_entity_type": "machine",
+        "inventory_slots": 2,
+        "recipe_category": "mill",
+        "tags": ["kinetic", "consumer", "machine"]
+      },
+      {
+        "id": "core:sand",
+        "display_name": "Sand",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "surface", "sand"]
+      },
+      {
+        "id": "core:sandstone",
+        "display_name": "Sandstone",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "soil", "sandstone"]
+      },
+      {
+        "id": "core:snow",
+        "display_name": "Snow",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "surface", "snow", "cold"]
+      },
+      {
+        "id": "core:red_sand",
+        "display_name": "Red Sand",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "surface", "sand", "badlands"]
+      },
+      {
+        "id": "core:terracotta",
+        "display_name": "Terracotta",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "soil", "badlands"]
+      },
+      {
+        "id": "core:gravel",
+        "display_name": "Gravel",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "soil", "gravel"]
+      },
+      {
+        "id": "core:basalt",
+        "display_name": "Basalt",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "solid", "volcanic"]
+      },
+      {
+        "id": "core:podzol",
+        "display_name": "Podzol",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "surface", "soil", "forest"]
+      },
+      {
+        "id": "core:mossy_stone",
+        "display_name": "Mossy Stone",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["terrain", "solid", "swamp"]
+      },
+      {
+        "id": "core:ice",
+        "display_name": "Ice",
+        "solid": true,
+        "opaque": false,
+        "render_surface": "transparent",
+        "light_attenuation": 1,
+        "tags": ["terrain", "ice", "cold", "transparent"]
+      },
+      {
+        "id": "core:leaves",
+        "display_name": "Leaves",
+        "solid": true,
+        "opaque": false,
+        "render_surface": "cutout",
+        "light_attenuation": 2,
+        "tags": ["foliage", "leaves", "cutout"]
+      },
+      {
+        "id": "core:space_rock",
+        "display_name": "Space Rock",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["space", "asteroid", "terrain", "solid"]
+      },
+      {
+        "id": "core:rich_metal_ore",
+        "display_name": "Rich Metal Ore",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "tags": ["space", "asteroid", "ore", "metal"]
+      },
+      {
+        "id": "core:aether_crystal_ore",
+        "display_name": "Aether Crystal Ore",
+        "solid": true,
+        "opaque": true,
+        "render_surface": "opaque",
+        "light_emission": 3,
+        "light_attenuation": 0,
+        "tags": ["space", "asteroid", "ore", "crystal"]
+      },
+      {
+        "id": "core:compressed_ice",
+        "display_name": "Compressed Ice",
+        "solid": true,
+        "opaque": false,
+        "render_surface": "transparent",
+        "light_attenuation": 1,
+        "tags": ["space", "asteroid", "ice", "cold", "transparent"]
+      }
+    ]
+  }
+}
