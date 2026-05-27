@@ -1,6 +1,7 @@
 #pragma once
 
 #include <voxel/core/Math.hpp>
+#include <voxel/world/BlockCollisionCatalog.hpp>
 #include <voxel/world/BlockState.hpp>
 #include <voxel/world/ChunkManager.hpp>
 #include <voxel/world/Coordinates.hpp>
@@ -45,6 +46,7 @@ public:
     void setWalkSpeed(float speed) noexcept;
     void setFlySpeed(float speed) noexcept;
     void setGravityScale(float scale) noexcept;
+    void setCollisionCatalog(world::BlockCollisionCatalog catalog);
     void setNoclip(bool enabled) noexcept;
     void toggleNoclip() noexcept;
 
@@ -68,10 +70,12 @@ public:
 private:
     [[nodiscard]] core::Vec3 forwardFlat() const noexcept;
     [[nodiscard]] core::Vec3 rightFlat() const noexcept;
+    [[nodiscard]] bool blockIsSolidForCollision(BlockStateId block) const noexcept;
     [[nodiscard]] bool collidesAt(const world::ChunkManager& chunks, core::Vec3 feetPosition) const;
     void moveAxis(const world::ChunkManager& chunks, double& component, float delta, int axis);
 
     PlayerControllerConfig config_{};
+    world::BlockCollisionCatalog collisionCatalog_{};
     core::DVec3 position_{72.0, 64.0, 88.0};
     core::DVec3 velocity_{};
     float gravityScale_{1.0F};

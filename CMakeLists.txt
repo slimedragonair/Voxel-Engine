@@ -134,6 +134,7 @@ add_library(voxel_engine STATIC
     src/voxel/core/JobSystem.cpp
     src/voxel/core/Logger.cpp
     src/voxel/data/BlockRegistry.cpp
+    src/voxel/data/CoreContentIds.cpp
     src/voxel/data/ItemRegistry.cpp
     src/voxel/data/RecipeRegistry.cpp
     src/voxel/data/RegistryLoader.cpp

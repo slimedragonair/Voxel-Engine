@@ -18,6 +18,7 @@
 #include <imgui.h>
 
 #include <voxel/core/Logger.hpp>
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/data/RegistryLoader.hpp>
 #include <voxel/render/MaterialTable.hpp>
 #include <voxel/render/meshing/ClipmapRegionMesher.hpp>
@@ -109,9 +110,11 @@ std::size_t estimateStreamingChunkCapacity(const world::StreamingSettings& setti
     return (horizontalDiameter * horizontalDiameter * verticalDiameter) + horizontalDiameter * horizontalDiameter;
 }
 
-world::NoiseTerrainSettings terrainSettingsForConfig(const ApplicationConfig& config)
+world::NoiseTerrainSettings terrainSettingsForConfig(const ApplicationConfig& config,
+                                                     const data::CoreBlockIds& coreBlocks = {})
 {
     world::NoiseTerrainSettings settings{};
+    data::applyCoreBlockIds(settings, coreBlocks);
     settings.enableSpaceAsteroids = config.enableSpacePhaseA;
     settings.space = config.space;
     return settings;
@@ -265,6 +268,11 @@ void Application::initialize()
     if (loadResult.recipesLoaded) {
         Logger::info("Loaded " + std::to_string(loadResult.recipeCount) + " recipes");
     }
+    coreBlocks_ = data::resolveCoreBlockIds(blocks_);
+    if (!coreBlocks_.allRequiredResolved) {
+        Logger::warn("Core block ID resolution fell back for one or more entries; check core block data.");
+    }
+    terrainGenerator_ = world::NoiseTerrainGenerator(terrainSettingsForConfig(config_, coreBlocks_));
     {
         const auto terrainPath = config_.paths.coreDataRoot() / "terrain.json";
         if (std::filesystem::exists(terrainPath)) {
@@ -279,8 +287,13 @@ void Application::initialize()
             Logger::warn("Terrain definition file missing: " + terrainPath.string());
         }
     }
+    hotbar_.reset(coreBlocks_);
+    selectedPlaceBlock_ = hotbar_.selected().block;
     seedCreativeInventory();
     blockRenderCatalog_ = blocks_.buildRenderCatalog();
+    blockCollisionCatalog_ = blocks_.buildCollisionCatalog();
+    player_.setCollisionCatalog(blockCollisionCatalog_);
+    spawnResolver_.setCollisionCatalog(blockCollisionCatalog_);
     blockLightCatalog_ = blocks_.buildLightCatalog();
     kineticCatalog_ = blocks_.buildKineticCatalog();
     player_.setWalkSpeed(config_.playerWalkSpeed);
@@ -351,8 +364,8 @@ void Application::initialize()
             std::size_t selfTestsPassed = 0;
             std::size_t selfTestsFailed = 0;
             std::size_t selfTestFaces = 0;
-            const auto stone = world::makeBlockState(BlockTypeId{2});
-            const auto glass = world::makeBlockState(BlockTypeId{3});
+            const auto stone = coreBlocks_.stone;
+            const auto glass = coreBlocks_.glass;
             const auto water = terrainGenerator_.settings().waterBlock;
 
             const auto checkHybridCase = [&](std::string_view name,
@@ -443,6 +456,12 @@ void Application::initialize()
                         ctx.cameraWorldParams,
                         ctx.atmosphereParams);
                 });
+            renderer_.setSwapchainRecreatedHook([this]() {
+                if (clusterRenderer_ != nullptr && !clusterRenderer_->rebuildSwapchainResources()) {
+                    Logger::warn("Application: ClusterRenderer pipeline rebuild after swapchain recreation failed; disabling LOD rendering.");
+                    config_.useClusterLod = false;
+                }
+            });
 
             // Phase 1D-2: bring up the GPU classifier. Failure here just
             // falls back to the CPU mesher path in tickClusterMaintenance —
@@ -475,265 +494,17 @@ void Application::initialize()
     initialized_ = true;
 }
 
-// NOTE: a duplicate Application::tick() lived here with truncated content;
-// wrapped in `#if 0` to keep history intact. The compiled implementation is
-// the canonical one further down.
-#if 0
-void Application::tick()
-{
-    renderer_.beginFrame();
-    // Open the ImGui frame and build the debug overlay using the previous
-    // frame's recorded counters. The 1-frame lag is invisible at 60+ FPS and
-    // avoids the chicken-and-egg of "ImGui::Render must happen before world
-    // rendering, but some counters aren't available until after."
-    renderer_.beginImGuiFrame();
-    debugOverlay_.draw(debugOverlayVisible_);
-    drawRuntimeSettingsOverlay();
-    renderer_.endImGuiFrame();
-    constexpr Tick tickIndex = 1;
-    const auto frameStart = std::chrono::steady_clock::now();
-    auto stageStart = frameStart;
-    core::RuntimeCounters frameCounters{};
-    frameCounters.frames = 1;
-    const auto markStage = [&](core::RuntimeCounters::Timer& timer) {
-        const auto stageEnd = std::chrono::steady_clock::now();
-        core::recordTimer(timer, elapsedUs(stageStart, stageEnd));
-        stageStart = stageEnd;
-    };
 
-    const auto markSubStage = [](core::RuntimeCounters::Timer& timer, std::chrono::steady_clock::time_point start) {
-        core::recordTimer(timer, elapsedUs(start, std::chrono::steady_clock::now()));
-    };
-
-    // 1. Install any chunks generated by workers in previous ticks (drains mailbox).
-    // 2. Plan + dispatch generation jobs for new requests.
-    auto streamSubStageStart = std::chrono::steady_clock::now();
-    const auto& requests = streamingRequestsForFrame();
-    markSubStage(frameCounters.stageStreamPlan, streamSubStageStart);
-    streamSubStageStart = std::chrono::steady_clock::now();
-    const auto& dispatchRequests = streamingDispatchRequestsForFrame(requests);
-    markSubStage(frameCounters.stageStreamDispatch, streamSubStageStart);
-    frameCounters.chunkRequestsPlanned = requests.size();
-    streamSubStageStart = std::chrono::steady_clock::now();
-    frameCounters.terrainPrepassJobsSubmitted = dispatchTerrainPrepassJobs(requests);
-    markSubStage(frameCounters.stageStreamPrepass, streamSubStageStart);
-    auto chunkPipelineSettings = config_.chunkPipeline;
-    chunkPipelineSettings.installPriorityCenter = streamingCenter();
-    chunkPipelineSettings.workerLoadRoot = config_.paths.saveRoot();
-    streamSubStageStart = std::chrono::steady_clock::now();
-    const auto stats = chunkPipeline_.processRequestsAsync(
-        chunks_, saveStore_, terrainGenerator_, jobs_, chunkJobMailbox_, dispatchRequests, chunkPipelineSettings);
-    markSubStage(frameCounters.stageStreamPipeline, streamSubStageStart);
-    frameCounters.generationJobsSubmitted = stats.dispatched;
-    frameCounters.generationJobsCompleted = stats.loaded;
-    frameCounters.remeshesCausedByNeighborInstall = stats.neighborRemeshes;
-    frameCounters.terrainGeneration = stats.generationTime;
-    frameCounters.terrainGenerationFromPrepass = stats.generationFromPrepassTime;
-    frameCounters.terrainGenerationDirect = stats.generationDirectTime;
-    core::mergeTimer(frameCounters.queueWait, stats.queueWaitTime);
-    frameCounters.load = stats.loadTime;
-    streamSubStageStart = std::chrono::steady_clock::now();
-    enqueueInstalledChunkWork(stats);
-    (void)enqueueVisibleMeshWork(requests);
-    markSubStage(frameCounters.stageStreamEnqueue, streamSubStageStart);
-    markStage(frameCounters.stageStreaming);
-
-    if (window_ != nullptr) {
-        const bool escapeDown = window_->keyDown(platform::Key::Escape);
-        if (escapeDown && !escapeToggleLatch_) {
-            if (inventoryOpen_) {
-                inventoryOpen_ = false;
-                window_->setCursorCaptured(true);
-                hasPlayerCursor_ = false;
-                Logger::info("Inventory overlay: closed");
-            } else if (window_->cursorCaptured()) {
-                window_->setCursorCaptured(false);
-                hasPlayerCursor_ = false;
-                Logger::info("Mouse released; click the sandbox window to capture again.");
-            }
-        }
-        escapeToggleLatch_ = escapeDown;
-
-        const bool anyMouseDown = window_->mouseButtonDown(platform::MouseButton::Left)
-            || window_->mouseButtonDown(platform::MouseButton::Right);
-        if (!inventoryOpen_ && !window_->cursorCaptured() && anyMouseDown) {
-            window_->setCursorCaptured(true);
-            hasPlayerCursor_ = false;
-            Logger::info("Mouse captured.");
-        }
-
-        const bool freecamDown = window_->keyDown(platform::Key::C);
-        if (freecamDown && !freecamToggleLatch_) {
-            freecam_ = !freecam_;
-            hasPlayerCursor_ = false;
-            if (freecam_) {
-                renderer_.setDebugCameraPose(player_.dEyePosition(), player_.yawRadians(), player_.pitchRadians());
-            }
-            Logger::info(std::string{"Camera mode: "} + (freecam_ ? "freecam" : "player"));
-        }
-        freecamToggleLatch_ = freecamDown;
-
-        const bool inventoryDown = window_->keyDown(platform::Key::I);
-        if (inventoryDown && !inventoryToggleLatch_) {
-            inventoryOpen_ = !inventoryOpen_;
-            window_->setCursorCaptured(!inventoryOpen_);
-            hasPlayerCursor_ = false;
-            Logger::info(std::string{"Inventory overlay: "} + (inventoryOpen_ ? "open" : "closed"));
-        }
-        inventoryToggleLatch_ = inventoryDown;
-
-        const bool noclipDown = window_->keyDown(platform::Key::V);
-        if (noclipDown && !noclipToggleLatch_) {
-            player_.toggleNoclip();
-            Logger::info(std::string{"Player noclip: "} + (player_.noclip() ? "on" : "off"));
-        }
-        noclipToggleLatch_ = noclipDown;
-
-        // F3 toggles the ImGui debug overlay (per-pipeline-stage timings,
-        // frame-time graph, copy-to-clipboard button).
-        const bool overlayKeyDown = window_->keyDown(platform::Key::F3);
-        if (overlayKeyDown && !debugOverlayToggleLatch_) {
-            debugOverlayVisible_ = !debugOverlayVisible_;
-            Logger::info(std::string{"Debug overlay: "} + (debugOverlayVisible_ ? "on" : "off"));
-        }
-        debugOverlayToggleLatch_ = overlayKeyDown;
-
-        const bool shouldAttemptSpawnResolve = !playerSpawnResolved_
-            && (frameIndex_ < 5 || frameIndex_ - lastSpawnResolveAttemptFrame_ >= 10);
-        if (shouldAttemptSpawnResolve) {
-            lastSpawnResolveAttemptFrame_ = frameIndex_;
-            playerSpawnResolved_ = tryResolvePlayerSpawn();
-        }
-
-        if (inventoryOpen_) {
-            renderer_.setDebugCameraPose(player_.dEyePosition(), player_.yawRadians(), player_.pitchRadians());
-        } else if (freecam_) {
-            renderer_.updateDebugCamera(*window_, 1.0F / 60.0F);
-        } else if (!playerSpawnResolved_) {
-            renderer_.setDebugCameraPose(player_.dEyePosition(), player_.yawRadians(), player_.pitchRadians());
-        } else {
-            player_.tick(chunks_, gatherPlayerInput(), 1.0F / 60.0F);
-            renderer_.setDebugCameraPose(player_.dEyePosition(), player_.yawRadians(), player_.pitchRadians());
-        }
-        // W0: tell the renderer whether the camera is currently in a water block.
-        // Drives the underwater fog effect. Uses the same camera selection as
-        // raycast (freecam vs player) so flying through water in freecam shows fog.
-        {
-            const auto cameraPos = freecam_ ? renderer_.debugCameraPosition() : player_.eyePosition();
-            const auto local = world::toChunkLocal(
-                static_cast<std::int64_t>(std::floor(cameraPos.x)),
-                static_cast<std::int64_t>(std::floor(cameraPos.y)),
-                static_cast<std::int64_t>(std::floor(cameraPos.z)));
-            float underwater = 0.0F;
-            if (const auto* chunk = chunks_.find(local.chunk)) {
-                const auto block = chunk->blockAt(local.local.x, local.local.y, local.local.z);
-                constexpr std::uint32_t kWaterTypeId = 12;
-                if ((block.value >> 16U) == kWaterTypeId) {
-                    underwater = 1.0F;
-                }
-            }
-            renderer_.setCameraUnderwater(underwater);
-        }
-        updateSelectedBlock();
-        const bool uiCapturesMouse = debugOverlay_.wantsMouseCapture() || runtimeSettingsMouseCapture_;
-        const auto interactionStats = (window_->cursorCaptured() && !inventoryOpen_ && !uiCapturesMouse)
-            ? handleWorldInteraction()
-            : core::RuntimeCounters{};
-        frameCounters.blockEditsAccepted += interactionStats.blockEditsAccepted;
-        frameCounters.blockEditsRejected += interactionStats.blockEditsRejected;
-        frameCounters.dirtyMeshChunksQueued += interactionStats.dirtyMeshChunksQueued;
-        frameCounters.dirtyMeshChunksCoalesced += interactionStats.dirtyMeshChunksCoalesced;
-        frameCounters.dirtyLightingChunksQueued += interactionStats.dirtyLightingChunksQueued;
-        frameCounters.dirtyLightingChunksCoalesced += interactionStats.dirtyLightingChunksCoalesced;
-    }
-    markStage(frameCounters.stagePlayer);
-
-    // 3. Install mesh results from prior ticks, then dispatch new mesh jobs.
-    //    The default s
-    //    optional CPU path still runs after meshing so visibility is not blocked.
-    const auto meshInstallStats = installMeshResults();
-    markStage(frameCounters.stageMeshInstall);
-    const auto meshDispatchStats = dispatchMeshJobs();
-    markStage(frameCounters.stageMeshDispatch);
-    // tickClusterMaintenance MOVED — see end of tick (after stageSimulation
-    // markStage). Was running here AND again before the simulation
-    // markStage, doubling the work and attributing ~15ms of LOD cost to
-    // light_ms/sim_ms. Phase 1D-2 will move the build itself to workers.
-    const auto lightingStats = config_.useGpuShaderLighting ? LightingStats{} : propagateLightingForDirtyChunks();
-    markStage(frameCounters.stageLighting);
-    frameCounters.meshJobsCompleted = meshInstallStats.completed;
-    frameCounters.meshJobsDiscardedStale = meshInstallStats.staleDiscarded;
-    frameCounters.lightingRecomputes = lightingStats.recomputed;
-    frameCounters.lightingJobsSubmitted = lightingStats.submitted;
-    frameCounters.lightingJobsCompleted = lightingStats.completed;
-    frameCounters.lightingJobsDiscardedStale = lightingStats.staleDiscarded;
-    frameCounters.lightingPropagation = lightingStats.propagationTime;
-    core::mergeTimer(frameCounters.queueWait, lightingStats.queueWaitTime);
-    frameCounters.meshJobsSubmitted = meshDispatchStats.submitted;
-    frameCounters.meshSnapshot = meshDispatchStats.snapshotTime;
-    frameCounters.dirtyQueueScanTimeUs = lightingStats.dirtyQueueScanTimeUs + meshDispatchStats.dirtyQueueScanTimeUs;
-    frameCounters.meshBuild = meshInstallStats.meshBuildTime;
-    core::mergeTimer(frameCounters.queueWait, meshInstallStats.queueWaitTime);
-    frameCounters.uploadBudgetDeferrals = meshInstallStats.uploadBudgetDeferrals;
-    if (!config_.useGpuShaderLighting && lightingStats.recomputed >= maxLightPropagationsPerTick_) {
-        frameCounters.lightingBudgetSaturated = 1;
-    }
-    if (meshInstallStats.uploadBudgetDeferrals > 0) {
-        frameCounters.meshInstallBudgetSaturated = 1;
-    }
-
-    const bool saveInterval = frameIndex_ > 0 && config_.workBudget.saveFlushIntervalFrames > 0
-        && (frameIndex_ % config_.workBudget.saveFlushIntervalFrames) == 0;
-    const auto saveStats = flushPendingSaves(saveInterval);
-    core::mergeTimer(frameCounters.save, saveStats.save);
-    frameCounters.saveQueueLength = saveStats.saveQueueLength;
-    frameCounters.savesFlushed = saveStats.savesFlushed;
-    frameCounters.saveBudgetSaturated = saveStats.saveBudgetSaturated;
-    frameCounters.dirtyLightingQueueLength = lightingQueue_.size();
-    frameCounters.dirtyMeshQueueLength = meshQueue_.size();
-    markStage(frameCounters.stageSave);
-
-    physics_.tick(tickIndex);
-    magic_.tick(tickIndex);
-    network_.tick(tickIndex);
-    simulation_.tick(gameRegistry_, 1.0F / 60.0F);
-    {
-        world::BlockEntityTickContext beContext{items_, recipes_, blocks_, machineInventories_, kineticSolver_, chunks_, {}, 1.0F / 60.0F, tickIndex};
-        const auto beStats = blockEntityScheduler_.tick(beContext, chunks_, blocks_,
-            config_.workBudget.maxLightingMsPerFrame,
-            // R0-LOD plan: LOD1 sim throttle. Only tick block entities
-            // for chunks inside the active sim band (LOD0). Chunks in
-            // LOD1 (between simulationDistance and renderDistance) keep
-            // their state but pause their entity ticks until the player
-            // moves closer.
-            [this](world::ChunkCoord c) { return isChunkInActiveSim(c); });
-        (void)beStats;
-    }
-    // W2: tick the fluid simulation. Queue is empty until a player edit
-    // wakes it, so this costs ~0 in steady state.
-    {
-        // When useGpuFluidSim is enabled, route ticks through the GPU sim.
-        // The CPU FluidSystem stays alive as the fallback / queue owner —
-        // its `wake()` helpers are still used by the rest of the engine
-        // (e.g. when a block edit adjacent to water wakes the queue). The
-        // queue ownership is unified into FluidGpuSystem when active.
-        const auto fluidStats = (fluidGpuSystem_ != nullptr)
-            ? fluidGpuSystem_->tick(chunks_, streamingCenter())
-            : fluidSystem_.tick(chunks_, streamingCenter());
-        (void)fluidStats;  // future: expose in DebugOverlay
-    }
-    updateAutomationDebug();
-    updateVisualOverlay();
-    markStage(frameCounters.stageSimulation);
-
-    renderer_.endFrame();
-    // (corrupt fragments removed — body trimmed at the truncation point)
-}
-#endif  // end of disabled duplicate Application::tick()
 
 void Application::tick()
 {
-    renderer_.beginFrame();
+    if (!renderer_.beginFrame()) {
+        // No swapchain image was acquired, usually because the window is
+        // minimized or resize recreation is waiting for a non-zero extent.
+        // Do not build ImGui draw data, upload meshes, or call endFrame()
+        // without a live image index for this tick.
+        return;
+    }
     // Open the ImGui frame and build the debug overlay using the previous
     // frame's recorded counters. The 1-frame lag is invisible at 60+ FPS and
     // avoids the chicken-and-egg of "ImGui::Render must happen before world
@@ -890,8 +661,7 @@ void Application::tick()
             float underwater = 0.0F;
             if (const auto* chunk = chunks_.find(local.chunk)) {
                 const auto block = chunk->blockAt(local.local.x, local.local.y, local.local.z);
-                constexpr std::uint32_t kWaterTypeId = 12;
-                if ((block.value >> 16U) == kWaterTypeId) {
+                if (coreBlocks_.isWater(block)) {
                     underwater = 1.0F;
                 }
             }
@@ -1601,6 +1371,7 @@ core::RuntimeCounters Application::handleWorldInteraction()
         if (auto* blockDelta = std::get_if<world::BlockDelta>(&delta)) {
             kineticSolver_.markDirty(blockDelta->position);
             blockEntityScheduler_.markDirty(blockDelta->position.chunk);
+            invalidateLodForEditedChunk(blockDelta->position.chunk);
 
             // W2: if the player just broke a block (now-air) next to a water
             // cell, BFS-activate that water so it can start flowing into the
@@ -1656,6 +1427,29 @@ core::RuntimeCounters Application::handleWorldInteraction()
         + " dirty_mesh_chunks=" + std::to_string(edit.dirtyMeshQueued)
         + " save_queue=" + std::to_string(worldSaveService_.dirtyChunkCount(chunks_)));
     return stats;
+}
+
+void Application::invalidateLodForEditedChunk(world::ChunkCoord coord)
+{
+    if (clusterRenderer_ == nullptr) {
+        return;
+    }
+
+    const auto cluster = world::chunkToCluster(coord);
+    const auto erased = builtClusters_.erase(cluster);
+    clusterRenderer_->removeClusterMesh(cluster);
+    if (erased != 0) {
+        Logger::info(
+            "LOD2 cluster invalidated by block edit: "
+            + std::to_string(cluster.x) + ","
+            + std::to_string(cluster.y) + ","
+            + std::to_string(cluster.z));
+    }
+
+    // LOD3 is currently a procedural clipmap sampled from NoiseTerrainGenerator,
+    // not an edit-aware voxel aggregate. Player edits are represented by LOD0
+    // chunks and edit-invalidated LOD2 clusters; far LOD3 intentionally stays
+    // terrain-noise-only until we add an edit delta layer for clipmaps.
 }
 
 core::RuntimeCounters Application::flushPendingSaves(bool force)
@@ -4675,7 +4469,7 @@ void Application::shutdown()
     streamingCenterChangedThisFrame_ = false;
     streamingDispatchIdle_ = false;
     lastSpawnResolveAttemptFrame_ = 0;
-    selectedPlaceBlock_ = world::makeBlockState(BlockTypeId{2});
+    selectedPlaceBlock_ = coreBlocks_.stone;
     cachedStreamingRequests_.clear();
     streamingDispatchRequests_.clear();
     pendingMeshResults_.clear();

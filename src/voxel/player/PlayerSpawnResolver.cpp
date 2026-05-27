@@ -2,15 +2,23 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
-#include <voxel/player/PlayerController.hpp>
 #include <voxel/world/CoordinateUtils.hpp>
+#include <voxel/world/BlockState.hpp>
 
 namespace voxel::player {
 
 PlayerSpawnResolver::PlayerSpawnResolver(PlayerSpawnResolverConfig config)
     : config_(config)
 {
+    collisionCatalog_.set(BlockTypeId{0}, false);
+    collisionCatalog_.set(BlockTypeId{12}, false);
+}
+
+void PlayerSpawnResolver::setCollisionCatalog(world::BlockCollisionCatalog catalog)
+{
+    collisionCatalog_ = std::move(catalog);
 }
 
 std::optional<core::Vec3> PlayerSpawnResolver::resolve(
@@ -44,14 +52,14 @@ std::optional<core::Vec3> PlayerSpawnResolver::resolve(
             }
 
             const auto block = chunk->blockAt(localX, localY, localZ);
-            if (!PlayerController::blockIsSolid(block)) {
+            if (!collisionCatalog_.isSolid(block)) {
                 continue;
             }
 
             const auto above = world::toChunkLocal(blockX, static_cast<std::int64_t>(y) + 1, blockZ);
             const auto* aboveChunk = chunks.find(above.chunk);
             if (aboveChunk != nullptr
-                && PlayerController::blockIsSolid(aboveChunk->blockAt(above.local.x, above.local.y, above.local.z))) {
+                && collisionCatalog_.isSolid(aboveChunk->blockAt(above.local.x, above.local.y, above.local.z))) {
                 continue;
             }
             return core::Vec3{worldX, static_cast<float>(y) + config_.feetClearance, worldZ};

@@ -152,18 +152,24 @@ void VulkanRenderer::initialize(const RendererConfig& config)
         + " compare=" + (compareGpuCull_ ? "on" : "off"));
 }
 
-void VulkanRenderer::beginFrame()
+bool VulkanRenderer::beginFrame()
 {
+    frameActive_ = false;
     if (!initialized_) {
-        return;
+        return false;
     }
     if (swapchainConfig_.window != nullptr) {
         const auto framebuffer = swapchainConfig_.window->framebufferExtent();
         if (framebuffer.width == 0 || framebuffer.height == 0) {
-            return;
+            acquiredImageIndex_ = 0;
+            return false;
         }
         if (framebuffer.width != swapchainExtent_.width || framebuffer.height != swapchainExtent_.height) {
             recreateSwapchain();
+            if (swapchain_ == VK_NULL_HANDLE || framebuffers_.empty()) {
+                acquiredImageIndex_ = 0;
+                return false;
+            }
         }
     }
 
@@ -192,7 +198,8 @@ void VulkanRenderer::beginFrame()
         frame.imageAvailable, VK_NULL_HANDLE, &acquiredImageIndex_);
     if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapchain();
-        return;
+        acquiredImageIndex_ = 0;
+        return false;
     }
     if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("Failed to acquire swapchain image");
@@ -200,6 +207,8 @@ void VulkanRenderer::beginFrame()
 
     check(vkResetFences(device_, 1, &frame.inFlight), "Failed to reset frame fence");
     check(vkResetCommandBuffer(frame.commandBuffer, 0), "Failed to reset command buffer");
+    frameActive_ = true;
+    return true;
 }
 
 void VulkanRenderer::recreateSwapchain()
@@ -228,13 +237,17 @@ void VulkanRenderer::recreateSwapchain()
     for (auto& frame : frames_) {
         frame.sceneGeneration = 0;
     }
+    if (swapchainRecreatedHook_) {
+        swapchainRecreatedHook_();
+    }
 }
 
 void VulkanRenderer::endFrame()
 {
-    if (!initialized_) {
+    if (!initialized_ || !frameActive_) {
         return;
     }
+    frameActive_ = false;
 
     FrameContext& frame = frames_[currentFrame_];
     recordFrameCommands(frame.commandBuffer, acquiredImageIndex_);
@@ -2850,6 +2863,11 @@ bool VulkanRenderer::stagingUpload(VkBuffer dst, VkDeviceSize dstOffset, const v
 void VulkanRenderer::setExternalDrawHook(ExternalDrawHook hook)
 {
     externalDrawHook_ = std::move(hook);
+}
+
+void VulkanRenderer::setSwapchainRecreatedHook(SwapchainRecreatedHook hook)
+{
+    swapchainRecreatedHook_ = std::move(hook);
 }
 
 bool VulkanRenderer::uploadIntoBuffer(VkBuffer dst, VkDeviceSize dstOffset, const void* data, VkDeviceSize bytes)

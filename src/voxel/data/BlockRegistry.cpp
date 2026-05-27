@@ -39,6 +39,20 @@ render::meshing::BlockRenderCatalog BlockRegistry::buildRenderCatalog() const
     return catalog;
 }
 
+world::BlockCollisionCatalog BlockRegistry::buildCollisionCatalog() const
+{
+    world::BlockCollisionCatalog catalog;
+    catalog.set(BlockTypeId{0}, false);
+    for (Registry<BlockDefinition>::RuntimeId id = 1; id <= registry_.size(); ++id) {
+        const auto* block = registry_.byRuntimeId(id);
+        if (block == nullptr) {
+            continue;
+        }
+        catalog.set(BlockTypeId{id}, block->solid);
+    }
+    return catalog;
+}
+
 automation::KineticBlockCatalog BlockRegistry::buildKineticCatalog() const
 {
     automation::KineticBlockCatalog catalog;

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string_view>
 
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/world/BlockState.hpp>
 
 namespace voxel::player {
@@ -18,6 +19,8 @@ public:
     static constexpr std::size_t SlotCount = 12;
 
     CreativeHotbar();
+    explicit CreativeHotbar(const data::CoreBlockIds& coreBlocks);
+    void reset(const data::CoreBlockIds& coreBlocks);
 
     [[nodiscard]] bool select(std::size_t slot) noexcept;
     [[nodiscard]] std::size_t selectedSlot() const noexcept;

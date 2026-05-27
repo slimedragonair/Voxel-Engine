@@ -9,6 +9,7 @@
 #include <voxel/data/Identifier.hpp>
 #include <voxel/data/Registry.hpp>
 #include <voxel/render/meshing/BlockRenderCatalog.hpp>
+#include <voxel/world/BlockCollisionCatalog.hpp>
 #include <voxel/world/BlockLightCatalog.hpp>
 
 namespace voxel::data {
@@ -49,6 +50,7 @@ public:
     [[nodiscard]] const BlockDefinition* find(const Identifier& id) const;
     [[nodiscard]] const Registry<BlockDefinition>& registry() const noexcept;
     [[nodiscard]] render::meshing::BlockRenderCatalog buildRenderCatalog() const;
+    [[nodiscard]] world::BlockCollisionCatalog buildCollisionCatalog() const;
     [[nodiscard]] automation::KineticBlockCatalog buildKineticCatalog() const;
     [[nodiscard]] world::BlockLightCatalog buildLightCatalog() const;
 

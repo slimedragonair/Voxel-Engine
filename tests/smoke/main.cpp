@@ -8,8 +8,10 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <voxel/automation/KineticNetwork.hpp>
@@ -19,6 +21,7 @@
 #include <voxel/core/Paths.hpp>
 #include <voxel/core/RuntimeStats.hpp>
 #include <voxel/data/BlockRegistry.hpp>
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/data/ItemRegistry.hpp>
 #include <voxel/data/RecipeRegistry.hpp>
 #include <voxel/data/RegistryLoader.hpp>
@@ -27,6 +30,7 @@
 #include <voxel/player/CreativeHotbar.hpp>
 #include <voxel/player/PlayerController.hpp>
 #include <voxel/player/PlayerSpawnResolver.hpp>
+#include <voxel/render/MaterialTable.hpp>
 #include <voxel/render/meshing/BlockRenderCatalog.hpp>
 #include <voxel/render/meshing/ChunkMeshCache.hpp>
 #include <voxel/render/meshing/ClipmapRegionMesher.hpp>
@@ -388,6 +392,59 @@ int main()
     const auto pressRecipes = loadedRecipes.recipesForMachineCategory("press");
     VOXEL_CHECK(millRecipes.size() >= 5);
     VOXEL_CHECK(pressRecipes.size() >= 2);
+    {
+        voxel::data::BlockRegistry reorderedBlocks;
+        const auto addBlock = [&reorderedBlocks](voxel::data::Identifier id,
+                                                 bool solid,
+                                                 bool opaque,
+                                                 voxel::render::meshing::MeshSurface surface,
+                                                 std::vector<std::string> tags = {}) {
+            voxel::data::BlockDefinition def;
+            def.id = std::move(id);
+            def.displayName = def.id.str();
+            def.solid = solid;
+            def.opaque = opaque;
+            def.renderSurface = surface;
+            def.tags = std::move(tags);
+            return reorderedBlocks.registerBlock(std::move(def));
+        };
+        const auto waterType = addBlock({"core", "water"}, false, false,
+            voxel::render::meshing::MeshSurface::Transparent, {"fluid", "water"});
+        const auto stoneType = addBlock({"core", "stone"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "solid"});
+        const auto grassType = addBlock({"core", "grass"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "surface"});
+        const auto dirtType = addBlock({"core", "dirt"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "soil"});
+        const auto ids = voxel::data::resolveCoreBlockIds(reorderedBlocks);
+        VOXEL_CHECK(ids.waterType.value == waterType.value);
+        VOXEL_CHECK(ids.stoneType.value == stoneType.value);
+        VOXEL_CHECK(ids.grassType.value == grassType.value);
+        VOXEL_CHECK(ids.dirtType.value == dirtType.value);
+        VOXEL_CHECK(ids.water.value == voxel::world::makeBlockState(waterType).value);
+        VOXEL_CHECK(ids.water.value != voxel::world::makeBlockState(voxel::BlockTypeId{12}).value);
+
+        voxel::world::NoiseTerrainSettings resolvedSettings{};
+        voxel::data::applyCoreBlockIds(resolvedSettings, ids);
+        VOXEL_CHECK(resolvedSettings.waterBlock.value == ids.water.value);
+        VOXEL_CHECK(resolvedSettings.stoneBlock.value == ids.stone.value);
+        VOXEL_CHECK(resolvedSettings.grassBlock.value == ids.grass.value);
+
+        const auto collision = reorderedBlocks.buildCollisionCatalog();
+        VOXEL_CHECK(!collision.isSolid(ids.water));
+        VOXEL_CHECK(collision.isSolid(ids.stone));
+        VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(voxel::world::makeBlockState(voxel::BlockTypeId{12})));
+        VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(
+            voxel::world::makeBlockState(voxel::BlockTypeId{12}, 7)));
+
+        voxel::player::CreativeHotbar reorderedHotbar(ids);
+        VOXEL_CHECK(reorderedHotbar.slot(0).block.value == ids.stone.value);
+        VOXEL_CHECK(reorderedHotbar.slot(4).block.value == ids.water.value);
+
+        const auto materials = voxel::render::MaterialTableBuilder::build(reorderedBlocks);
+        VOXEL_CHECK(materials[waterType.value].noiseParams[3] == 5.0F);
+        VOXEL_CHECK(materials[stoneType.value].baseColor[0] == 0.50F);
+    }
     voxel::world::TerrainDefinitionRegistry terrainDefinitions;
     voxel::world::TerrainDefinitionLoader terrainDefinitionLoader;
     const auto terrainDefinitionResult = terrainDefinitionLoader.load("assets/data/core/terrain.json", terrainDefinitions);

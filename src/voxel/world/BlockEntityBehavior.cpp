@@ -48,6 +48,7 @@ void BlockEntityTickScheduler::removeBehavior(const PlanetCoord& pos)
 
 void BlockEntityTickScheduler::initialize(const data::BlockRegistry& blocks, const BlockEntityTypeRegistry& types)
 {
+    (void)blocks;
     typeRegistry_ = &types;
 }
 

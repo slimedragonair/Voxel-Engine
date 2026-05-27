@@ -23,7 +23,7 @@ namespace voxel::render {
 class VulkanRenderer final : public IRenderer {
 public:
     void initialize(const RendererConfig& config) override;
-    void beginFrame() override;
+    [[nodiscard]] bool beginFrame() override;
     void endFrame() override;
     void shutdown() override;
 
@@ -208,12 +208,18 @@ public:
         float atmosphereParams[4]{};
     };
     using ExternalDrawHook = std::function<void(const ExternalDrawContext&)>;
+    using SwapchainRecreatedHook = std::function<void()>;
     // Set an "after chunk draws" callback. Pass an empty function to
     // remove. The hook is invoked once per frame inside the same render
     // pass that drew chunks, so receivers can issue further indexed
     // draws against the swapchain framebuffer without managing their
     // own render passes.
     void setExternalDrawHook(ExternalDrawHook hook);
+    // Called after VulkanRenderer has finished rebuilding its swapchain,
+    // render pass, framebuffers, and internal graphics pipelines. External
+    // modules whose pipelines were created against renderPass() must rebuild
+    // their swapchain-dependent pipeline objects here before the next frame.
+    void setSwapchainRecreatedHook(SwapchainRecreatedHook hook);
 
     // Render pass + extent. ClusterRenderer needs the render pass at
     // pipeline-creation time and the swapchain extent for the dynamic
@@ -490,6 +496,7 @@ private:
     std::array<FrameContext, kFramesInFlight> frames_{};
     std::uint32_t currentFrame_{0};
     std::uint32_t acquiredImageIndex_{0};
+    bool frameActive_{false};
     std::unordered_map<world::ChunkCoord, UploadedChunkMesh, world::ChunkCoordHash> uploadedMeshes_;
     DebugLineMesh debugLineMesh_{};
     std::vector<RetiredBuffer> retiredBuffers_;
@@ -514,6 +521,7 @@ private:
     // hook itself is provided by the caller — keeps VulkanRenderer
     // independent of ClusterRenderer's type.
     ExternalDrawHook externalDrawHook_;
+    SwapchainRecreatedHook swapchainRecreatedHook_;
 
     VkBuffer stagingArenaBuffer_{VK_NULL_HANDLE};
     VmaAllocation stagingArenaAllocation_{VK_NULL_HANDLE};

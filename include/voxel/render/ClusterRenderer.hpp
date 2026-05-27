@@ -65,6 +65,11 @@ public:
 
     [[nodiscard]] bool initialized() const noexcept { return initialized_; }
 
+    // Rebuild only graphics pipelines that were baked against
+    // VulkanRenderer::renderPass(). Mesh arenas, descriptor sets, and uploaded
+    // LOD meshes survive swapchain recreation.
+    [[nodiscard]] bool rebuildSwapchainResources();
+
     // LOD tier classification for uploaded meshes. Determines the per-
     // instance scale factor written to the origins SSBO .w component:
     //   Cluster (LOD2): scale = 1.0 — vertex positions are already in
@@ -171,6 +176,8 @@ public:
 
 private:
     struct GpuResources;
+    void destroyPipelines() noexcept;
+    [[nodiscard]] bool createPipelines();
 
     VulkanRenderer& renderer_;
     std::unique_ptr<GpuResources> gpu_;

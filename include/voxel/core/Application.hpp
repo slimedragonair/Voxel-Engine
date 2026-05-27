@@ -18,6 +18,7 @@
 #include <voxel/core/Paths.hpp>
 #include <voxel/core/RuntimeStats.hpp>
 #include <voxel/data/BlockRegistry.hpp>
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/data/ItemRegistry.hpp>
 #include <voxel/data/RecipeRegistry.hpp>
 #include <voxel/ecs/Components.hpp>
@@ -41,6 +42,7 @@
 #include <voxel/save/RegionFileStore.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BlockEditor.hpp>
+#include <voxel/world/BlockCollisionCatalog.hpp>
 #include <voxel/world/BlockEditQueue.hpp>
 #include <voxel/world/BlockEntityBehavior.hpp>
 #include <voxel/world/CoreBehaviors.hpp>
@@ -230,6 +232,7 @@ private:
     void resizeWorkerPool(std::size_t workerCount);
     void seedCreativeInventory();
     [[nodiscard]] core::RuntimeCounters handleWorldInteraction();
+    void invalidateLodForEditedChunk(world::ChunkCoord coord);
     void handleInventoryInteraction();
     [[nodiscard]] core::RuntimeCounters flushPendingSaves(bool force);
     bool tryResolvePlayerSpawn();
@@ -266,9 +269,11 @@ private:
     ApplicationConfig config_;
     core::JobSystem jobs_;
     data::BlockRegistry blocks_;
+    data::CoreBlockIds coreBlocks_;
     data::ItemRegistry items_;
     data::RecipeRegistry recipes_;
     render::meshing::BlockRenderCatalog blockRenderCatalog_;
+    world::BlockCollisionCatalog blockCollisionCatalog_;
     world::BlockLightCatalog blockLightCatalog_;
     automation::KineticBlockCatalog kineticCatalog_;
     automation::KineticNetworkSolver kineticSolver_;
@@ -463,7 +468,7 @@ private:
     std::size_t lastSpawnResolveAttemptFrame_{0};
     double lastPlayerCursorX_{0.0};
     double lastPlayerCursorY_{0.0};
-    BlockStateId selectedPlaceBlock_{2};
+    BlockStateId selectedPlaceBlock_{};
     std::vector<world::ChunkRequest> cachedStreamingRequests_;
     std::vector<world::ChunkRequest> streamingDispatchRequests_;
     std::vector<world::ChunkMeshResult> pendingMeshResults_;
