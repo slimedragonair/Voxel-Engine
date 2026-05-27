@@ -1,7 +1,7 @@
 # AetherForge: Infinite Creation
 
 Working title for the Vulkan-first, `32^3` chunk-based voxel game engine
-formerly tracked as Voxel Engine Finale.
+Using Mostly AI coding, im not a coder, but i am learning things so its fun.
 
 ## Current Scope
 
