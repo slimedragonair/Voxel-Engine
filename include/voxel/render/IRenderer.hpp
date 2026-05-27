@@ -19,7 +19,7 @@ class IRenderer {
 public:
     virtual ~IRenderer() = default;
     virtual void initialize(const RendererConfig& config) = 0;
-    virtual void beginFrame() = 0;
+    [[nodiscard]] virtual bool beginFrame() = 0;
     virtual void endFrame() = 0;
     virtual void shutdown() = 0;
 };

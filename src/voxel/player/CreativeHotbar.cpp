@@ -5,21 +5,34 @@ using namespace voxel::world;
 namespace voxel::player {
 
 CreativeHotbar::CreativeHotbar()
-    : slots_{{
-        {"stone", makeBlockState(BlockTypeId{2})},
-        {"dirt", makeBlockState(BlockTypeId{8})},
-        {"grass", makeBlockState(BlockTypeId{9})},
-        {"glass", makeBlockState(BlockTypeId{3})},
-        {"water", makeBlockState(BlockTypeId{12})},
-        {"creative motor", makeBlockState(BlockTypeId{5})},
-        {"wooden gear", makeBlockState(BlockTypeId{6})},
-        {"belt", makeBlockState(BlockTypeId{16})},
-        {"gearbox", makeBlockState(BlockTypeId{17})},
-        {"mechanical press", makeBlockState(BlockTypeId{7})},
-        {"clutch", makeBlockState(BlockTypeId{18})},
-        {"millstone", makeBlockState(BlockTypeId{19})},
-    }}
+    : CreativeHotbar(data::CoreBlockIds{})
 {
+}
+
+CreativeHotbar::CreativeHotbar(const data::CoreBlockIds& coreBlocks)
+{
+    reset(coreBlocks);
+}
+
+void CreativeHotbar::reset(const data::CoreBlockIds& coreBlocks)
+{
+    slots_ = {{
+        {"stone", coreBlocks.stone},
+        {"dirt", coreBlocks.dirt},
+        {"grass", coreBlocks.grass},
+        {"glass", coreBlocks.glass},
+        {"water", coreBlocks.water},
+        {"creative motor", coreBlocks.creativeMotor},
+        {"wooden gear", coreBlocks.woodenGear},
+        {"belt", coreBlocks.belt},
+        {"gearbox", coreBlocks.gearbox},
+        {"mechanical press", coreBlocks.mechanicalPress},
+        {"clutch", coreBlocks.clutch},
+        {"millstone", coreBlocks.millstone},
+    }};
+    if (!validSlot(selected_)) {
+        selected_ = 0;
+    }
 }
 
 bool CreativeHotbar::select(std::size_t slot) noexcept

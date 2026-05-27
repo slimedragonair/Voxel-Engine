@@ -29,6 +29,7 @@ SimulationStats SimulationSystem::drainStats()
 
 void SimulationSystem::tickItemDrops(GameRegistry& registry, float dt)
 {
+    (void)dt;
     auto view = registry.view<ItemStackComponent, LifetimeComponent, TransformComponent>();
     for (auto entity : view) {
         auto& lifetime = view.get<LifetimeComponent>(entity);
@@ -44,8 +45,9 @@ void SimulationSystem::tickItemDrops(GameRegistry& registry, float dt)
 
 void SimulationSystem::tickBelts(GameRegistry& registry, float dt)
 {
+    (void)dt;
     auto view = registry.view<BeltSegmentComponent, TransformComponent>();
-    for (auto entity : view) {
+    for ([[maybe_unused]] auto entity : view) {
         ++stats_.beltEntitiesTicked;
     }
 }

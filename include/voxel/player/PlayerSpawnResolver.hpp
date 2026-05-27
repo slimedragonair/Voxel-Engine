@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <voxel/core/Math.hpp>
+#include <voxel/world/BlockCollisionCatalog.hpp>
 #include <voxel/world/ChunkManager.hpp>
 
 namespace voxel::player {
@@ -16,6 +17,7 @@ struct PlayerSpawnResolverConfig {
 class PlayerSpawnResolver {
 public:
     explicit PlayerSpawnResolver(PlayerSpawnResolverConfig config = {});
+    void setCollisionCatalog(world::BlockCollisionCatalog catalog);
 
     [[nodiscard]] std::optional<core::Vec3> resolve(
         const world::ChunkManager& chunks,
@@ -24,6 +26,7 @@ public:
 
 private:
     PlayerSpawnResolverConfig config_{};
+    world::BlockCollisionCatalog collisionCatalog_{};
 };
 
 } // namespace voxel::player

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include <voxel/world/CoordinateUtils.hpp>
 
@@ -10,7 +11,7 @@ namespace voxel::player {
 namespace {
 
 constexpr float kEpsilon = 0.001F;
-constexpr std::uint32_t kWaterBlockId = 12;
+constexpr std::uint32_t kFallbackWaterTypeId = 12;
 constexpr int kCollisionSearchIterations = 10;
 
 } // namespace
@@ -18,6 +19,8 @@ constexpr int kCollisionSearchIterations = 10;
 PlayerController::PlayerController(PlayerControllerConfig config)
     : config_(config)
 {
+    collisionCatalog_.set(BlockTypeId{0}, false);
+    collisionCatalog_.set(BlockTypeId{kFallbackWaterTypeId}, false);
 }
 
 void PlayerController::setPosition(core::Vec3 position) noexcept
@@ -53,6 +56,11 @@ void PlayerController::setFlySpeed(float speed) noexcept
 void PlayerController::setGravityScale(float scale) noexcept
 {
     gravityScale_ = std::clamp(scale, 0.0F, 1.0F);
+}
+
+void PlayerController::setCollisionCatalog(world::BlockCollisionCatalog catalog)
+{
+    collisionCatalog_ = std::move(catalog);
 }
 
 void PlayerController::setNoclip(bool enabled) noexcept
@@ -200,7 +208,8 @@ bool PlayerController::overlapsBlock(world::ChunkCoord chunk, world::BlockCoord 
 
 bool PlayerController::blockIsSolid(BlockStateId block) noexcept
 {
-    return block.value != world::AirBlockState.value && block.value != kWaterBlockId;
+    return block.value != world::AirBlockState.value
+        && world::blockTypeOf(block).value != kFallbackWaterTypeId;
 }
 
 core::Vec3 PlayerController::forwardFlat() const noexcept
@@ -231,13 +240,18 @@ bool PlayerController::collidesAt(const world::ChunkManager& chunks, core::Vec3 
                 if (chunk == nullptr) {
                     continue;
                 }
-                if (blockIsSolid(chunk->blockAt(local.local.x, local.local.y, local.local.z))) {
+                if (blockIsSolidForCollision(chunk->blockAt(local.local.x, local.local.y, local.local.z))) {
                     return true;
                 }
             }
         }
     }
     return false;
+}
+
+bool PlayerController::blockIsSolidForCollision(BlockStateId block) const noexcept
+{
+    return collisionCatalog_.isSolid(block);
 }
 
 void PlayerController::moveAxis(const world::ChunkManager& chunks, double& component, float delta, int axis)

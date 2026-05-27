@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <future>
 #include <memory>
 #include <optional>
@@ -18,6 +17,7 @@
 #include <voxel/core/Paths.hpp>
 #include <voxel/core/RuntimeStats.hpp>
 #include <voxel/data/BlockRegistry.hpp>
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/data/ItemRegistry.hpp>
 #include <voxel/data/RecipeRegistry.hpp>
 #include <voxel/ecs/Components.hpp>
@@ -39,8 +39,10 @@
 #include <voxel/render/meshing/ClusterMeshDiskCache.hpp>
 #include <voxel/render/meshing/HybridMeshingGpuSystem.hpp>
 #include <voxel/save/RegionFileStore.hpp>
+#include <voxel/save/SaveCoordinator.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BlockEditor.hpp>
+#include <voxel/world/BlockCollisionCatalog.hpp>
 #include <voxel/world/BlockEditQueue.hpp>
 #include <voxel/world/BlockEntityBehavior.hpp>
 #include <voxel/world/CoreBehaviors.hpp>
@@ -185,10 +187,6 @@ private:
         core::RuntimeCounters::Timer queueWaitTime{};
     };
 
-    struct AsyncSaveJob {
-        std::future<std::size_t> future;
-    };
-
     struct PendingHybridMeshJob {
         std::optional<world::Chunk> target;
         world::ChunkCoord coord{};
@@ -230,15 +228,14 @@ private:
     void resizeWorkerPool(std::size_t workerCount);
     void seedCreativeInventory();
     [[nodiscard]] core::RuntimeCounters handleWorldInteraction();
+    void invalidateLodForEditedChunk(world::ChunkCoord coord);
     void handleInventoryInteraction();
-    [[nodiscard]] core::RuntimeCounters flushPendingSaves(bool force);
     bool tryResolvePlayerSpawn();
     void updateSpaceEnvironment(core::DVec3 cameraPos);
     void updateWindowTitle();
     void updateVisualOverlay();
     void evictFarMeshCache();
     void drainOutstandingJobsForShutdown();
-    [[nodiscard]] std::size_t drainCompletedSaveJobs(bool wait);
     void updateAutomationDebug();
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingRequestsForFrame();
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingDispatchRequestsForFrame(
@@ -266,9 +263,11 @@ private:
     ApplicationConfig config_;
     core::JobSystem jobs_;
     data::BlockRegistry blocks_;
+    data::CoreBlockIds coreBlocks_;
     data::ItemRegistry items_;
     data::RecipeRegistry recipes_;
     render::meshing::BlockRenderCatalog blockRenderCatalog_;
+    world::BlockCollisionCatalog blockCollisionCatalog_;
     world::BlockLightCatalog blockLightCatalog_;
     automation::KineticBlockCatalog kineticCatalog_;
     automation::KineticNetworkSolver kineticSolver_;
@@ -407,6 +406,7 @@ private:
     bool debugOverlayToggleLatch_{false};
     save::RegionFileStore saveStore_;
     save::WorldSaveService worldSaveService_;
+    save::SaveCoordinator saveCoordinator_;
     world::VoxelRaycaster raycaster_;
     world::BlockEditor blockEditor_;
     world::BlockEditQueue blockEditQueue_;
@@ -414,7 +414,6 @@ private:
     player::PlayerSpawnResolver spawnResolver_;
     player::CreativeHotbar hotbar_;
     std::unique_ptr<platform::IWindow> window_;
-    std::deque<AsyncSaveJob> asyncSaveJobs_;
     automation::NetworkGraph automationGraph_;
     physics::PhysicsSystem physics_;
     magic::MagicSystem magic_;
@@ -463,7 +462,7 @@ private:
     std::size_t lastSpawnResolveAttemptFrame_{0};
     double lastPlayerCursorX_{0.0};
     double lastPlayerCursorY_{0.0};
-    BlockStateId selectedPlaceBlock_{2};
+    BlockStateId selectedPlaceBlock_{};
     std::vector<world::ChunkRequest> cachedStreamingRequests_;
     std::vector<world::ChunkRequest> streamingDispatchRequests_;
     std::vector<world::ChunkMeshResult> pendingMeshResults_;

@@ -128,6 +128,23 @@ constexpr int RegionClusterExtent = RegionChunkExtent / ClusterChunkExtent; // 4
     };
 }
 
+struct LodEditInvalidationTargets {
+    ClusterCoord cluster{};
+    RegionCoord region{};
+};
+
+// Player edits currently rebuild the owning LOD2 cluster. The LOD3 clipmap
+// remains terrain-noise-only, but returning the region here keeps the future
+// edit-aware clipmap target explicit and testable.
+[[nodiscard]] constexpr LodEditInvalidationTargets lodInvalidationTargetsForEditedChunk(
+    ChunkCoord chunk) noexcept
+{
+    return LodEditInvalidationTargets{
+        chunkToCluster(chunk),
+        chunkToRegion(chunk),
+    };
+}
+
 struct RegionCoordHash {
     [[nodiscard]] std::size_t operator()(RegionCoord coord) const noexcept
     {

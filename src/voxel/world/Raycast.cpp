@@ -11,14 +11,13 @@ namespace {
 
 constexpr float Epsilon = 0.00001F;
 
-// Water is the only fluid in the registry today. When we add lava/slime/etc,
-// extend this list (or move it onto BlockDefinition::tags lookup).
-constexpr std::uint32_t kWaterTypeId = 12;
+// Water is the only fluid in the fallback core registry today. Application
+// overrides this from CoreBlockIds after the registry is loaded.
+constexpr BlockTypeId kFallbackFluidType{12};
 
-[[nodiscard]] bool isFluidBlock(BlockStateId block) noexcept
+[[nodiscard]] bool isFluidBlock(BlockStateId block, BlockTypeId fluidBlockType) noexcept
 {
-    const auto typeId = block.value >> 16U;
-    return typeId == kWaterTypeId;
+    return blockTypeOf(block).value == fluidBlockType.value;
 }
 
 [[nodiscard]] bool isAir(BlockStateId block) noexcept
@@ -48,10 +47,15 @@ float axisTMax(float origin, int block, float direction) noexcept
 
 bool blockMatchesRaycastMask(BlockStateId block, RaycastMask mask) noexcept
 {
+    return blockMatchesRaycastMask(block, mask, kFallbackFluidType);
+}
+
+bool blockMatchesRaycastMask(BlockStateId block, RaycastMask mask, BlockTypeId fluidBlockType) noexcept
+{
     if (isAir(block)) {
         return false;
     }
-    const bool fluid = isFluidBlock(block);
+    const bool fluid = isFluidBlock(block, fluidBlockType);
     switch (mask) {
         case RaycastMask::SolidOnly:     return !fluid;
         case RaycastMask::FluidsOnly:    return fluid;
@@ -89,7 +93,7 @@ std::optional<VoxelRaycastHit> VoxelRaycaster::cast(const ChunkManager& chunks, 
         const auto chunkLocal = toChunkLocal(x, y, z);
         if (const auto* chunk = chunks.find(chunkLocal.chunk)) {
             const auto block = chunk->blockAt(chunkLocal.local.x, chunkLocal.local.y, chunkLocal.local.z);
-            if (blockMatchesRaycastMask(block, ray.mask)) {
+            if (blockMatchesRaycastMask(block, ray.mask, fluidBlockType_)) {
                 return VoxelRaycastHit{
                     {ray.planetId, {}, chunkLocal.chunk, chunkLocal.local},
                     normal,
@@ -121,4 +125,3 @@ std::optional<VoxelRaycastHit> VoxelRaycaster::cast(const ChunkManager& chunks, 
 }
 
 } // namespace voxel::world
-

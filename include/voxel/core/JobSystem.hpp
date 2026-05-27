@@ -60,6 +60,9 @@ public:
 private:
     using Task = std::function<void()>;
 
+    // Follow-up seam: keep the public submit API narrow so we can split this
+    // implementation into long-running world workers, short upload/reduction
+    // workers, and IO/cache workers without changing call sites first.
     void enqueue(JobPriority priority, Task task);
     void workerLoop();
     bool popTask(Task& outTask);

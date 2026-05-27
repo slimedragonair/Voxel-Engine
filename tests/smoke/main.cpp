@@ -8,8 +8,10 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <voxel/automation/KineticNetwork.hpp>
@@ -19,6 +21,7 @@
 #include <voxel/core/Paths.hpp>
 #include <voxel/core/RuntimeStats.hpp>
 #include <voxel/data/BlockRegistry.hpp>
+#include <voxel/data/CoreContentIds.hpp>
 #include <voxel/data/ItemRegistry.hpp>
 #include <voxel/data/RecipeRegistry.hpp>
 #include <voxel/data/RegistryLoader.hpp>
@@ -27,6 +30,7 @@
 #include <voxel/player/CreativeHotbar.hpp>
 #include <voxel/player/PlayerController.hpp>
 #include <voxel/player/PlayerSpawnResolver.hpp>
+#include <voxel/render/MaterialTable.hpp>
 #include <voxel/render/meshing/BlockRenderCatalog.hpp>
 #include <voxel/render/meshing/ChunkMeshCache.hpp>
 #include <voxel/render/meshing/ClipmapRegionMesher.hpp>
@@ -34,6 +38,7 @@
 #include <voxel/render/meshing/GreedyMesher.hpp>
 #include <voxel/save/PlayerInventorySaveService.hpp>
 #include <voxel/save/RegionFileStore.hpp>
+#include <voxel/save/SaveCoordinator.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BitPackedArray.hpp>
 #include <voxel/world/BlockEditor.hpp>
@@ -78,6 +83,7 @@ int main()
     using voxel::world::ClusterChunkExtent;
     using voxel::world::LodLevel;
     using voxel::world::LodSettings;
+    using voxel::world::RegionCoord;
     VOXEL_CHECK(ClusterChunkExtent == 4); // anchor for the band assertions below
 
     // Positive coords: straightforward division.
@@ -102,6 +108,17 @@ int main()
             const ChunkCoord c{12 + dx, -8 + dy, 0};
             VOXEL_CHECK(voxel::world::chunkToCluster(c) == (ClusterCoord{3, -2, 0}));
         }
+    }
+
+    {
+        const auto targets = voxel::world::lodInvalidationTargetsForEditedChunk({17, -1, 33});
+        VOXEL_CHECK(targets.cluster == (ClusterCoord{4, -1, 8}));
+        VOXEL_CHECK(targets.region == (RegionCoord{1, -1, 2}));
+    }
+    {
+        const auto targets = voxel::world::lodInvalidationTargetsForEditedChunk({-17, -16, -1});
+        VOXEL_CHECK(targets.cluster == (ClusterCoord{-5, -4, -1}));
+        VOXEL_CHECK(targets.region == (RegionCoord{-2, -1, -1}));
     }
 
     // LOD tier selection on default bands {8, 24, 96, 1600}.
@@ -388,6 +405,70 @@ int main()
     const auto pressRecipes = loadedRecipes.recipesForMachineCategory("press");
     VOXEL_CHECK(millRecipes.size() >= 5);
     VOXEL_CHECK(pressRecipes.size() >= 2);
+    {
+        voxel::data::BlockRegistry reorderedBlocks;
+        const auto addBlock = [&reorderedBlocks](voxel::data::Identifier id,
+                                                 bool solid,
+                                                 bool opaque,
+                                                 voxel::render::meshing::MeshSurface surface,
+                                                 std::vector<std::string> tags = {}) {
+            voxel::data::BlockDefinition def;
+            def.id = std::move(id);
+            def.displayName = def.id.str();
+            def.solid = solid;
+            def.opaque = opaque;
+            def.renderSurface = surface;
+            def.tags = std::move(tags);
+            return reorderedBlocks.registerBlock(std::move(def));
+        };
+        const auto waterType = addBlock({"core", "water"}, false, false,
+            voxel::render::meshing::MeshSurface::Transparent, {"fluid", "water"});
+        const auto stoneType = addBlock({"core", "stone"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "solid"});
+        const auto grassType = addBlock({"core", "grass"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "surface"});
+        const auto dirtType = addBlock({"core", "dirt"}, true, true,
+            voxel::render::meshing::MeshSurface::Opaque, {"terrain", "soil"});
+        const auto ids = voxel::data::resolveCoreBlockIds(reorderedBlocks);
+        VOXEL_CHECK(ids.waterType.value == waterType.value);
+        VOXEL_CHECK(ids.stoneType.value == stoneType.value);
+        VOXEL_CHECK(ids.grassType.value == grassType.value);
+        VOXEL_CHECK(ids.dirtType.value == dirtType.value);
+        VOXEL_CHECK(ids.water.value == voxel::world::makeBlockState(waterType).value);
+        VOXEL_CHECK(ids.water.value != voxel::world::makeBlockState(voxel::BlockTypeId{12}).value);
+
+        voxel::world::NoiseTerrainSettings resolvedSettings{};
+        voxel::data::applyCoreBlockIds(resolvedSettings, ids);
+        VOXEL_CHECK(resolvedSettings.waterBlock.value == ids.water.value);
+        VOXEL_CHECK(resolvedSettings.stoneBlock.value == ids.stone.value);
+        VOXEL_CHECK(resolvedSettings.grassBlock.value == ids.grass.value);
+
+        const auto collision = reorderedBlocks.buildCollisionCatalog();
+        VOXEL_CHECK(!collision.isSolid(ids.water));
+        VOXEL_CHECK(collision.isSolid(ids.stone));
+        VOXEL_CHECK(voxel::world::blockMatchesRaycastMask(
+            ids.water,
+            voxel::world::RaycastMask::FluidsOnly,
+            ids.waterType));
+        VOXEL_CHECK(!voxel::world::blockMatchesRaycastMask(
+            voxel::world::makeBlockState(voxel::BlockTypeId{12}),
+            voxel::world::RaycastMask::FluidsOnly,
+            ids.waterType));
+        voxel::world::VoxelRaycaster reorderedRaycaster;
+        reorderedRaycaster.setFluidBlockType(ids.waterType);
+        VOXEL_CHECK(reorderedRaycaster.fluidBlockType().value == ids.waterType.value);
+        VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(voxel::world::makeBlockState(voxel::BlockTypeId{12})));
+        VOXEL_CHECK(!voxel::player::PlayerController::blockIsSolid(
+            voxel::world::makeBlockState(voxel::BlockTypeId{12}, 7)));
+
+        voxel::player::CreativeHotbar reorderedHotbar(ids);
+        VOXEL_CHECK(reorderedHotbar.slot(0).block.value == ids.stone.value);
+        VOXEL_CHECK(reorderedHotbar.slot(4).block.value == ids.water.value);
+
+        const auto materials = voxel::render::MaterialTableBuilder::build(reorderedBlocks);
+        VOXEL_CHECK(materials[waterType.value].noiseParams[3] == 5.0F);
+        VOXEL_CHECK(materials[stoneType.value].baseColor[0] == 0.50F);
+    }
     voxel::world::TerrainDefinitionRegistry terrainDefinitions;
     voxel::world::TerrainDefinitionLoader terrainDefinitionLoader;
     const auto terrainDefinitionResult = terrainDefinitionLoader.load("assets/data/core/terrain.json", terrainDefinitions);
@@ -1132,6 +1213,53 @@ int main()
         const auto savedRest = saveService.saveDirtyChunks(saveBudgetChunks, saveStore, 8);
         VOXEL_CHECK(savedRest == 1);
         VOXEL_CHECK(saveService.dirtyChunkCount(saveBudgetChunks) == 0);
+    }
+    {
+        voxel::world::ChunkManager asyncSaveChunks;
+        const voxel::world::ChunkCoord firstCoord{220, 0, 0};
+        const voxel::world::ChunkCoord secondCoord{221, 0, 0};
+        auto& first = asyncSaveChunks.createOrGet(firstCoord);
+        auto& second = asyncSaveChunks.createOrGet(secondCoord);
+        first.markLoaded(1);
+        second.markLoaded(1);
+        first.setBlock(0, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+        second.setBlock(1, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+
+        voxel::save::WorldSaveService saveService;
+        voxel::save::SaveCoordinator coordinator;
+        voxel::core::JobSystem saveJobs;
+        saveJobs.start(1);
+        voxel::save::SaveCoordinatorSettings saveSettings{};
+        saveSettings.saveRoot = "build/test_saves/save_coordinator";
+        saveSettings.maxSavesPerFlush = 1;
+        saveSettings.saveFlushIntervalFrames = 120;
+
+        const auto idleStats = coordinator.flushPending(
+            false, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(idleStats.saveQueueLength == 2);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 0);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 2);
+
+        const auto firstFlush = coordinator.flushPending(
+            true, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(firstFlush.saveBudgetSaturated == 1);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 1);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 1);
+        saveJobs.waitAll();
+        VOXEL_CHECK(coordinator.drainCompleted(true) == 1);
+
+        const auto secondFlush = coordinator.flushPending(
+            true, asyncSaveChunks, saveService, saveJobs, saveSettings, 1);
+        VOXEL_CHECK(secondFlush.saveQueueLength == 1);
+        saveJobs.waitAll();
+        VOXEL_CHECK(coordinator.drainCompleted(true) == 1);
+        VOXEL_CHECK(coordinator.pendingJobCount() == 0);
+        VOXEL_CHECK(saveService.dirtyChunkCount(asyncSaveChunks) == 0);
+
+        voxel::save::RegionFileStore coordinatorStore(saveSettings.saveRoot);
+        VOXEL_CHECK(coordinatorStore.loadChunk(firstCoord).has_value());
+        VOXEL_CHECK(coordinatorStore.loadChunk(secondCoord).has_value());
+        saveJobs.stop();
     }
 
     voxel::world::ChunkManager pipelineChunks;

@@ -135,6 +135,171 @@ struct ClusterPushConstants {
 static_assert(sizeof(ClusterPushConstants) == 128,
               "ClusterPushConstants must remain in sync with VulkanRenderer::PushConstants");
 
+void ClusterRenderer::destroyPipelines() noexcept
+{
+    const auto device = renderer_.device();
+    if (device == VK_NULL_HANDLE) {
+        return;
+    }
+    if (gpu_->pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, gpu_->pipeline, nullptr);
+        gpu_->pipeline = VK_NULL_HANDLE;
+    }
+    if (gpu_->pipelineTransparent != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, gpu_->pipelineTransparent, nullptr);
+        gpu_->pipelineTransparent = VK_NULL_HANDLE;
+    }
+}
+
+bool ClusterRenderer::createPipelines()
+{
+    if (gpu_->pipelineLayout == VK_NULL_HANDLE || renderer_.renderPass() == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    const std::filesystem::path vertSpvPath =
+        std::filesystem::path(VOXEL_SHADER_DIR) / "cluster.vert.spv";
+    const std::filesystem::path fragSpvPath =
+        std::filesystem::path(VOXEL_SHADER_DIR) / "voxel.frag.spv";
+    const auto vertSpv = readSpv(vertSpvPath);
+    const auto fragSpv = readSpv(fragSpvPath);
+    if (vertSpv.empty() || fragSpv.empty()) {
+        Logger::error("ClusterRenderer: failed to read shader SPV for pipeline rebuild");
+        return false;
+    }
+
+    const auto makeShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
+        VkShaderModuleCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = code.size();
+        info.pCode = reinterpret_cast<const std::uint32_t*>(code.data());
+        VkShaderModule module = VK_NULL_HANDLE;
+        vkCreateShaderModule(renderer_.device(), &info, nullptr, &module);
+        return module;
+    };
+
+    VkShaderModule vertModule = makeShaderModule(vertSpv);
+    VkShaderModule fragModule = makeShaderModule(fragSpv);
+    if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE) {
+        if (vertModule != VK_NULL_HANDLE) vkDestroyShaderModule(renderer_.device(), vertModule, nullptr);
+        if (fragModule != VK_NULL_HANDLE) vkDestroyShaderModule(renderer_.device(), fragModule, nullptr);
+        Logger::error("ClusterRenderer: shader module creation failed during pipeline rebuild");
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo vertStage{};
+    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStage.module = vertModule;
+    vertStage.pName = "main";
+    VkPipelineShaderStageCreateInfo fragStage{};
+    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragStage.module = fragModule;
+    fragStage.pName = "main";
+    const VkPipelineShaderStageCreateInfo stages[] = {vertStage, fragStage};
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding = meshing::ClusterVertexInputDesc::kBinding;
+    binding.stride = meshing::ClusterVertexInputDesc::kStride;
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    std::array<VkVertexInputAttributeDescription, 3> attributes{};
+    for (std::size_t i = 0; i < attributes.size(); ++i) {
+        const auto& attr = meshing::ClusterVertexInputDesc::kAttributes[i];
+        attributes[i].location = attr.location;
+        attributes[i].binding = meshing::ClusterVertexInputDesc::kBinding;
+        attributes[i].format = static_cast<VkFormat>(attr.format);
+        attributes[i].offset = attr.offset;
+    }
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size());
+    vertexInput.pVertexAttributeDescriptions = attributes.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0F;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+      | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    const std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = gpu_->pipelineLayout;
+    pipelineInfo.renderPass = renderer_.renderPass();
+    pipelineInfo.subpass = 0;
+
+    const auto opaqueResult = vkCreateGraphicsPipelines(
+        renderer_.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gpu_->pipeline);
+    depthStencil.depthWriteEnable = VK_FALSE;
+    const auto transparentResult = vkCreateGraphicsPipelines(
+        renderer_.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gpu_->pipelineTransparent);
+
+    vkDestroyShaderModule(renderer_.device(), vertModule, nullptr);
+    vkDestroyShaderModule(renderer_.device(), fragModule, nullptr);
+
+    if (opaqueResult != VK_SUCCESS || transparentResult != VK_SUCCESS) {
+        destroyPipelines();
+        Logger::error("ClusterRenderer: graphics pipeline rebuild failed");
+        return false;
+    }
+    return true;
+}
+
 ClusterRenderer::ClusterRenderer(VulkanRenderer& renderer)
     : renderer_(renderer),
       gpu_(std::make_unique<GpuResources>())
@@ -303,158 +468,10 @@ bool ClusterRenderer::initialize()
         return false;
     }
 
-    // ---- 7. Load shaders ------------------------------------------------
-    const std::filesystem::path vertSpvPath =
-        std::filesystem::path(VOXEL_SHADER_DIR) / "cluster.vert.spv";
-    const std::filesystem::path fragSpvPath =
-        std::filesystem::path(VOXEL_SHADER_DIR) / "voxel.frag.spv";
-    const auto vertSpv = readSpv(vertSpvPath);
-    const auto fragSpv = readSpv(fragSpvPath);
-    if (vertSpv.empty() || fragSpv.empty()) {
-        Logger::error("ClusterRenderer::initialize: failed to read shader SPV "
-                      "(cluster.vert.spv or voxel.frag.spv missing)");
-        shutdown();
-        return false;
-    }
-
-    const auto makeShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
-        VkShaderModuleCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        info.codeSize = code.size();
-        info.pCode = reinterpret_cast<const std::uint32_t*>(code.data());
-        VkShaderModule m = VK_NULL_HANDLE;
-        vkCreateShaderModule(renderer_.device(), &info, nullptr, &m);
-        return m;
-    };
-    VkShaderModule vertModule = makeShaderModule(vertSpv);
-    VkShaderModule fragModule = makeShaderModule(fragSpv);
-    if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE) {
-        Logger::error("ClusterRenderer::initialize: shader module creation failed");
-        if (vertModule != VK_NULL_HANDLE) vkDestroyShaderModule(renderer_.device(), vertModule, nullptr);
-        if (fragModule != VK_NULL_HANDLE) vkDestroyShaderModule(renderer_.device(), fragModule, nullptr);
-        shutdown();
-        return false;
-    }
-
-    // ---- 8. Build the graphics pipeline --------------------------------
-    VkPipelineShaderStageCreateInfo vertStage{};
-    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertStage.module = vertModule;
-    vertStage.pName = "main";
-    VkPipelineShaderStageCreateInfo fragStage{};
-    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragStage.module = fragModule;
-    fragStage.pName = "main";
-    const VkPipelineShaderStageCreateInfo stages[] = {vertStage, fragStage};
-
-    // Vertex input — ClusterVertex format. Convert the locked desc table
-    // from ClusterMesh.hpp into Vulkan structs.
-    VkVertexInputBindingDescription binding{};
-    binding.binding = meshing::ClusterVertexInputDesc::kBinding;
-    binding.stride = meshing::ClusterVertexInputDesc::kStride;
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    std::array<VkVertexInputAttributeDescription, 3> attributes{};
-    for (std::size_t i = 0; i < attributes.size(); ++i) {
-        const auto& attr = meshing::ClusterVertexInputDesc::kAttributes[i];
-        attributes[i].location = attr.location;
-        attributes[i].binding = meshing::ClusterVertexInputDesc::kBinding;
-        attributes[i].format = static_cast<VkFormat>(attr.format);
-        attributes[i].offset = attr.offset;
-    }
-    VkPipelineVertexInputStateCreateInfo vertexInput{};
-    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size());
-    vertexInput.pVertexAttributeDescriptions = attributes.data();
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterizer.lineWidth = 1.0F;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    // MUST match VulkanRenderer's chunk pipeline. The engine uses
-    // reverse-Z: depth buffer is cleared to 0.0 (far plane), gl_Position
-    // outputs near=1/far=0, depth compare is GREATER_OR_EQUAL so closer
-    // (higher-z) fragments win. We previously had VK_COMPARE_OP_LESS
-    // here, which against a reverse-Z buffer meant the cluster passed
-    // only when it was FARTHER than the chunk — exactly the bug
-    // observed (far clusters drawing on top of near chunks).
-    depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
-
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-      | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_TRUE;
-    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
-
-    const std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
-    dynamicState.pDynamicStates = dynamicStates.data();
-
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = stages;
-    pipelineInfo.pVertexInputState = &vertexInput;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = gpu_->pipelineLayout;
-    pipelineInfo.renderPass = renderer_.renderPass();
-    pipelineInfo.subpass = 0;
-
-    const auto opaqueResult = vkCreateGraphicsPipelines(
-        renderer_.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gpu_->pipeline);
-
-    // Transparent variant: same pipeline but depth-write disabled so
-    // transparent draws don't punch holes in subsequent depth tests.
-    depthStencil.depthWriteEnable = VK_FALSE;
-    const auto transparentResult = vkCreateGraphicsPipelines(
-        renderer_.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &gpu_->pipelineTransparent);
-
-    vkDestroyShaderModule(renderer_.device(), vertModule, nullptr);
-    vkDestroyShaderModule(renderer_.device(), fragModule, nullptr);
-
-    if (opaqueResult != VK_SUCCESS || transparentResult != VK_SUCCESS) {
-        Logger::error("ClusterRenderer::initialize: pipeline creation failed");
+    // Pipelines are the only ClusterRenderer resources tied to the current
+    // Vulkan render pass. Use the same helper here and during swapchain
+    // recreation so depth/blend state cannot drift between the two paths.
+    if (!createPipelines()) {
         shutdown();
         return false;
     }
@@ -476,14 +493,7 @@ void ClusterRenderer::shutdown() noexcept
         return;
     }
     if (renderer_.device() != VK_NULL_HANDLE) {
-        if (gpu_->pipeline != VK_NULL_HANDLE) {
-            vkDestroyPipeline(renderer_.device(), gpu_->pipeline, nullptr);
-            gpu_->pipeline = VK_NULL_HANDLE;
-        }
-        if (gpu_->pipelineTransparent != VK_NULL_HANDLE) {
-            vkDestroyPipeline(renderer_.device(), gpu_->pipelineTransparent, nullptr);
-            gpu_->pipelineTransparent = VK_NULL_HANDLE;
-        }
+        destroyPipelines();
         if (gpu_->pipelineLayout != VK_NULL_HANDLE) {
             vkDestroyPipelineLayout(renderer_.device(), gpu_->pipelineLayout, nullptr);
             gpu_->pipelineLayout = VK_NULL_HANDLE;
@@ -506,6 +516,20 @@ void ClusterRenderer::shutdown() noexcept
     gpu_->vertexArena.shutdown();
     uploadedClusters_.clear();
     initialized_ = false;
+}
+
+bool ClusterRenderer::rebuildSwapchainResources()
+{
+    if (!initialized_ || !renderer_.initialized()) {
+        return false;
+    }
+
+    // VulkanRenderer calls this hook immediately after vkDeviceWaitIdle() and
+    // after creating the replacement render pass/framebuffers. Only graphics
+    // pipelines depend on render-pass compatibility, so the large mesh arenas
+    // and uploaded LOD meshes stay resident across window resize/minimize.
+    destroyPipelines();
+    return createPipelines();
 }
 
 bool ClusterRenderer::uploadClusterMesh(world::ClusterCoord coord,
