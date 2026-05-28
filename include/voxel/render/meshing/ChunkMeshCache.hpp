@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -16,7 +17,11 @@ public:
     [[nodiscard]] const ChunkMesh* find(world::ChunkCoord coord) const;
     [[nodiscard]] bool isCurrent(world::ChunkCoord coord, Revision revision) const;
     void remove(world::ChunkCoord coord);
-    [[nodiscard]] std::vector<world::ChunkCoord> removeOutsideRadius(world::ChunkCoord center, int horizontalRadius, int verticalRadius);
+    [[nodiscard]] std::vector<world::ChunkCoord> removeOutsideRadius(
+        world::ChunkCoord center,
+        int horizontalRadius,
+        int verticalRadius,
+        const std::function<bool(world::ChunkCoord)>& keep = {});
     void clear();
     [[nodiscard]] std::size_t size() const noexcept;
 

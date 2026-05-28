@@ -103,6 +103,52 @@ std::int64_t chunkDistanceScore(world::ChunkCoord coord, world::ChunkCoord cente
     return (dx * dx) + (dy * dy * 4) + (dz * dz);
 }
 
+std::int64_t intervalDistanceToPoint(
+    std::int64_t minValue,
+    std::int64_t maxValue,
+    std::int64_t point) noexcept
+{
+    if (point < minValue) {
+        return minValue - point;
+    }
+    if (point > maxValue) {
+        return point - maxValue;
+    }
+    return 0;
+}
+
+std::int64_t clusterHorizontalDistanceChunks(
+    world::ClusterCoord cluster,
+    world::ChunkCoord center) noexcept
+{
+    const auto origin = world::clusterChunkOrigin(cluster);
+    const auto dx = intervalDistanceToPoint(
+        origin.x,
+        origin.x + world::ClusterChunkExtent - 1,
+        center.x);
+    const auto dz = intervalDistanceToPoint(
+        origin.z,
+        origin.z + world::ClusterChunkExtent - 1,
+        center.z);
+    return std::max(dx, dz);
+}
+
+std::int64_t regionHorizontalDistanceChunks(
+    world::RegionCoord region,
+    world::ChunkCoord center) noexcept
+{
+    const auto origin = world::regionChunkOrigin(region);
+    const auto dx = intervalDistanceToPoint(
+        origin.x,
+        origin.x + world::RegionChunkExtent - 1,
+        center.x);
+    const auto dz = intervalDistanceToPoint(
+        origin.z,
+        origin.z + world::RegionChunkExtent - 1,
+        center.z);
+    return std::max(dx, dz);
+}
+
 std::size_t estimateStreamingChunkCapacity(const world::StreamingSettings& settings) noexcept
 {
     const auto horizontalDiameter = static_cast<std::size_t>(std::max(0, settings.renderDistanceChunks) * 2 + 1);
@@ -2353,7 +2399,10 @@ void Application::evictFarMeshCache()
     const auto center = streamingCenter();
     const int h = config_.streaming.renderDistanceChunks + 2;
     const int v = config_.streaming.verticalRenderDistanceChunks + 1;
-    const auto removed = meshCache_.removeOutsideRadius(center, h, v);
+    const auto keepSurfaceChunk = [this](world::ChunkCoord coord) {
+        return surfaceVisibilityRetainSet_.count(coord) != 0;
+    };
+    const auto removed = meshCache_.removeOutsideRadius(center, h, v, keepSurfaceChunk);
     for (const auto coord : removed) {
         renderer_.removeUploadedMesh(coord);
     }
@@ -2384,7 +2433,7 @@ void Application::evictFarMeshCache()
         const int chunkH = config_.streaming.renderDistanceChunks + 12;
         const int chunkV = config_.streaming.verticalRenderDistanceChunks + 6;
         const auto evictedChunks = chunks_.evictOutsideRadius(
-            center, chunkH, chunkV, kMaxChunkEvictionsPerTick);
+            center, chunkH, chunkV, kMaxChunkEvictionsPerTick, keepSurfaceChunk);
         if (!evictedChunks.empty()) {
             // Mirror the log shape of the mesh eviction so it's easy to
             // see both streams in the same log scan.
@@ -2470,6 +2519,112 @@ void Application::updateAutomationDebug()
 
 }
 
+void Application::refreshSurfaceVisibilityRequests(world::ChunkCoord center, bool streamSpaceOnly)
+{
+    const int renderDistance = std::max(0, config_.streaming.renderDistanceChunks);
+    const int verticalDistance = std::max(0, config_.streaming.verticalRenderDistanceChunks);
+    const int forwardBucket = streamingForwardBucket(player_.forwardVector());
+    if (surfaceVisibilityCacheValid_
+        && cachedSurfaceVisibilityCenter_ == center
+        && cachedSurfaceVisibilityRenderDistance_ == renderDistance
+        && cachedSurfaceVisibilityVerticalDistance_ == verticalDistance
+        && cachedSurfaceVisibilityForwardBucket_ == forwardBucket
+        && cachedSurfaceVisibilitySpaceOnly_ == streamSpaceOnly) {
+        return;
+    }
+
+    cachedSurfaceVisibilityCenter_ = center;
+    cachedSurfaceVisibilityRenderDistance_ = renderDistance;
+    cachedSurfaceVisibilityVerticalDistance_ = verticalDistance;
+    cachedSurfaceVisibilityForwardBucket_ = forwardBucket;
+    cachedSurfaceVisibilitySpaceOnly_ = streamSpaceOnly;
+    surfaceVisibilityCacheValid_ = true;
+    surfaceVisibilityRequests_.clear();
+    surfaceVisibilityRetainSet_.clear();
+
+    if (streamSpaceOnly || renderDistance <= 0) {
+        return;
+    }
+
+    // Vertical render distance still bounds hidden underground/interior slabs.
+    // This pass keeps only the visible terrain skin alive when ATGS places a
+    // valley, seabed, or peak many chunks above/below the player.
+    constexpr int kMaxSurfaceVisibilityRadius = 24;
+    constexpr int kSurfaceSkirtChunksBelow = 1;
+    const int surfaceRadius = std::min(renderDistance, kMaxSurfaceVisibilityRadius);
+    const auto forward = player_.forwardVector();
+    const float forwardLength = std::sqrt((forward.x * forward.x) + (forward.z * forward.z));
+    const float forwardX = forwardLength > 0.0F ? forward.x / forwardLength : 0.0F;
+    const float forwardZ = forwardLength > 0.0F ? forward.z / forwardLength : 0.0F;
+
+    const auto addSurfaceRequest = [&](std::int64_t chunkX,
+                                       std::int64_t chunkY,
+                                       std::int64_t chunkZ,
+                                       int dx,
+                                       int dz,
+                                       float layerBias) {
+        const world::ChunkCoord coord{chunkX, chunkY, chunkZ};
+        if (!surfaceVisibilityRetainSet_.insert(coord).second) {
+            return;
+        }
+        const float horizontalDistance2 = static_cast<float>((dx * dx) + (dz * dz));
+        const float verticalDistanceFromPlayer = static_cast<float>(std::abs(chunkY - center.y));
+        const float forwardDot = static_cast<float>(dx) * forwardX + static_cast<float>(dz) * forwardZ;
+        const float forwardBias = std::max(0.0F, forwardDot) * 0.25F;
+        const float priority = (horizontalDistance2 * 0.20F)
+            + (verticalDistanceFromPlayer * 0.04F)
+            + layerBias
+            - forwardBias
+            - 8.0F;
+        surfaceVisibilityRequests_.push_back({coord, priority});
+    };
+
+    surfaceVisibilityRequests_.reserve(
+        static_cast<std::size_t>((surfaceRadius * 2 + 1) * (surfaceRadius * 2 + 1) * 3));
+
+    for (int dz = -surfaceRadius; dz <= surfaceRadius; ++dz) {
+        for (int dx = -surfaceRadius; dx <= surfaceRadius; ++dx) {
+            const auto chunkX = center.x + dx;
+            const auto chunkZ = center.z + dz;
+            const float worldX = static_cast<float>(chunkX * world::ChunkSize + world::ChunkSize / 2);
+            const float worldZ = static_cast<float>(chunkZ * world::ChunkSize + world::ChunkSize / 2);
+            const auto column = terrainGenerator_.sampleColumnAt(worldX, worldZ);
+            const auto surfaceChunkY =
+                world::floorDiv(static_cast<std::int64_t>(column.surfaceY), world::ChunkSize);
+
+            addSurfaceRequest(chunkX, surfaceChunkY, chunkZ, dx, dz, 0.0F);
+            if (column.isOcean) {
+                const auto seaChunkY =
+                    world::floorDiv(static_cast<std::int64_t>(column.seaLevel), world::ChunkSize);
+                addSurfaceRequest(chunkX, seaChunkY, chunkZ, dx, dz, 0.15F);
+            }
+            for (int skirt = 1; skirt <= kSurfaceSkirtChunksBelow; ++skirt) {
+                addSurfaceRequest(
+                    chunkX,
+                    surfaceChunkY - skirt,
+                    chunkZ,
+                    dx,
+                    dz,
+                    0.65F * static_cast<float>(skirt));
+            }
+        }
+    }
+
+    std::sort(surfaceVisibilityRequests_.begin(), surfaceVisibilityRequests_.end(),
+        [](const world::ChunkRequest& lhs, const world::ChunkRequest& rhs) {
+            if (lhs.priority == rhs.priority) {
+                if (lhs.coord.y == rhs.coord.y) {
+                    if (lhs.coord.x == rhs.coord.x) {
+                        return lhs.coord.z < rhs.coord.z;
+                    }
+                    return lhs.coord.x < rhs.coord.x;
+                }
+                return lhs.coord.y < rhs.coord.y;
+            }
+            return lhs.priority < rhs.priority;
+        });
+}
+
 const std::vector<world::ChunkRequest>& Application::streamingRequestsForFrame()
 {
     const auto center = streamingCenter();
@@ -2483,6 +2638,7 @@ const std::vector<world::ChunkRequest>& Application::streamingRequestsForFrame()
     } else {
         streamingSettings.pinnedVerticalChunkY = static_cast<int>(world::floorDiv(seaLevelBlockY, world::ChunkSize));
     }
+    refreshSurfaceVisibilityRequests(center, streamSpaceOnly);
     const int forwardBucket = streamingForwardBucket(player_.forwardVector());
     const bool settingsChanged = cachedStreamingSettings_.renderDistanceChunks != streamingSettings.renderDistanceChunks
         || cachedStreamingSettings_.verticalRenderDistanceChunks != streamingSettings.verticalRenderDistanceChunks
@@ -2668,54 +2824,20 @@ const std::vector<world::ChunkRequest>& Application::streamingDispatchRequestsFo
         return true;
     };
 
-    // ATGS can put nearby surfaces many chunks above/below the player's
-    // current vertical band. Request a small bridge toward those surface
-    // slabs first; otherwise high terrain appears as a new LOD surface
-    // floating over old/low loaded chunks until vertical streaming catches up.
+    // ATGS can put nearby visible surfaces many chunks above/below the
+    // player's current vertical band. Dispatch a bounded number of those
+    // top-surface chunks before the ordinary slab requests. This is not a
+    // full vertical bridge; hidden terrain below the visible skin remains
+    // governed by verticalRenderDistanceChunks.
     {
-        const auto center = streamingCenter();
-        const int vRadius = std::max(0, config_.streaming.verticalRenderDistanceChunks);
-        const std::int64_t loadedMinY = center.y - vRadius;
-        const std::int64_t loadedMaxY = center.y + vRadius;
-        const bool streamSpaceOnly = config_.enableSpacePhaseA
-            && static_cast<float>(center.y * world::ChunkSize) >= config_.space.nearSpaceStartY;
-        const int surfaceRadius = std::min(config_.streaming.renderDistanceChunks, 10);
         const std::size_t surfaceBudget = std::max<std::size_t>(4U, targetCandidates / 3U);
         std::size_t surfaceAdded = 0;
-        if (!streamSpaceOnly && surfaceRadius > 0) {
-            for (int ring = 0; ring <= surfaceRadius && surfaceAdded < surfaceBudget; ++ring) {
-                for (int dz = -ring; dz <= ring && surfaceAdded < surfaceBudget; ++dz) {
-                    for (int dx = -ring; dx <= ring && surfaceAdded < surfaceBudget; ++dx) {
-                        if (std::max(std::abs(dx), std::abs(dz)) != ring) {
-                            continue;
-                        }
-                        const auto chunkX = center.x + dx;
-                        const auto chunkZ = center.z + dz;
-                        const float worldX = static_cast<float>(chunkX * world::ChunkSize + world::ChunkSize / 2);
-                        const float worldZ = static_cast<float>(chunkZ * world::ChunkSize + world::ChunkSize / 2);
-                        const auto column = terrainGenerator_.sampleColumnAt(worldX, worldZ);
-                        const std::int64_t surfaceChunkY =
-                            world::floorDiv(static_cast<std::int64_t>(column.surfaceY), world::ChunkSize);
-                        if (surfaceChunkY >= loadedMinY && surfaceChunkY <= loadedMaxY) {
-                            continue;
-                        }
-
-                        const std::int64_t step = surfaceChunkY > loadedMaxY ? -1 : 1;
-                        const std::int64_t stopExclusive = surfaceChunkY > loadedMaxY ? loadedMaxY : loadedMinY;
-                        for (std::int64_t y = surfaceChunkY;
-                             y != stopExclusive && surfaceAdded < surfaceBudget;
-                             y += step) {
-                            if (y >= loadedMinY && y <= loadedMaxY) {
-                                break;
-                            }
-                            const float verticalBias = static_cast<float>(std::abs(y - center.y)) * 0.05F;
-                            const float horizontalBias = static_cast<float>((dx * dx) + (dz * dz)) * 0.15F;
-                            if (tryAppendRequest({{chunkX, y, chunkZ}, horizontalBias + verticalBias - 4.0F})) {
-                                ++surfaceAdded;
-                            }
-                        }
-                    }
-                }
+        for (const auto& request : surfaceVisibilityRequests_) {
+            if (surfaceAdded >= surfaceBudget) {
+                break;
+            }
+            if (tryAppendRequest(request)) {
+                ++surfaceAdded;
             }
         }
     }
@@ -2991,24 +3113,41 @@ std::size_t Application::enqueueVisibleMeshWork(const std::vector<world::ChunkRe
         std::max<std::size_t>(maxEnqueues * 8U, 128U));
 
     std::size_t enqueued = 0;
+    const auto tryEnqueueMesh = [&](const world::ChunkRequest& request) {
+        const auto* chunk = chunks_.find(request.coord);
+        if (chunk == nullptr) {
+            return false;
+        }
+        if (chunk->state() != world::ChunkState::Resident && chunk->state() != world::ChunkState::MeshReady) {
+            return false;
+        }
+        if (!chunk->dirty().mesh && meshCache_.isCurrent(request.coord, chunk->revision())) {
+            return false;
+        }
+
+        return meshQueue_.enqueue(request.coord, chunk->revision(), chunk->meshRevision(), request.priority);
+    };
+
+    std::size_t surfaceScanned = 0;
+    const std::size_t maxSurfaceScans = std::min<std::size_t>(
+        surfaceVisibilityRequests_.size(),
+        std::max<std::size_t>(maxEnqueues * 4U, 64U));
+    for (const auto& request : surfaceVisibilityRequests_) {
+        if (surfaceScanned++ >= maxSurfaceScans || enqueued >= maxEnqueues) {
+            break;
+        }
+        if (tryEnqueueMesh({request.coord, std::min(request.priority, -45.0F)})) {
+            ++enqueued;
+        }
+    }
+
     std::size_t scanned = 0;
     for (const auto& request : requests) {
         if (scanned++ >= maxScans || enqueued >= maxEnqueues) {
             break;
         }
 
-        const auto* chunk = chunks_.find(request.coord);
-        if (chunk == nullptr) {
-            continue;
-        }
-        if (chunk->state() != world::ChunkState::Resident && chunk->state() != world::ChunkState::MeshReady) {
-            continue;
-        }
-        if (!chunk->dirty().mesh && meshCache_.isCurrent(request.coord, chunk->revision())) {
-            continue;
-        }
-
-        if (meshQueue_.enqueue(request.coord, chunk->revision(), chunk->meshRevision(), -50.0F)) {
+        if (tryEnqueueMesh({request.coord, std::min(request.priority, -50.0F)})) {
             ++enqueued;
         }
     }
@@ -3214,9 +3353,6 @@ void Application::tickClusterMaintenance()
             std::int64_t{config_.streaming.renderDistanceChunks};
         const auto evictLodBands =
             world::computeLodBands(chunkRadiusForEvict, config_.farTerrainQualityMultiplier);
-        const std::int64_t evictInnerR = std::max<std::int64_t>(1,
-            (evictLodBands.lod0End + 2 * (world::ClusterChunkExtent - 1))
-                / world::ClusterChunkExtent);
         const std::int64_t evictHorizR =
             std::max<std::int64_t>(3, chunkRadiusForEvict / world::ClusterChunkExtent + 4);
         const std::int64_t evictVertR =
@@ -3232,11 +3368,11 @@ void Application::tickClusterMaintenance()
             const auto adx = dx >= 0 ? dx : -dx;
             const auto ady = dy >= 0 ? dy : -dy;
             const auto adz = dz >= 0 ? dz : -dz;
-            const auto horizontalChebyshev = std::max(adx, adz);
             const bool outOfRange = (adx > evictHorizR)
                                  || (adz > evictHorizR)
                                  || (ady > evictVertR);
-            const bool insideFullChunkBand = horizontalChebyshev < evictInnerR;
+            const bool insideFullChunkBand =
+                clusterHorizontalDistanceChunks(it->first, evictCenterChunk) <= evictLodBands.lod0End;
             if ((outOfRange || insideFullChunkBand) && evicted < kMaxEvictionsPerTick) {
                 clusterRenderer_->removeClusterMesh(it->first);
                 it = builtClusters_.erase(it);
@@ -3273,7 +3409,8 @@ void Application::tickClusterMaintenance()
     {
         std::unordered_set<world::ClusterCoord, world::ClusterCoordHash> skip;
         skip.reserve(builtClusters_.size());
-        const auto skipCenterCluster = world::chunkToCluster(streamingCenter());
+        const auto skipCenterChunk = streamingCenter();
+        const auto skipCenterCluster = world::chunkToCluster(skipCenterChunk);
         const auto skipLodBands = world::computeLodBands(
             std::int64_t{config_.streaming.renderDistanceChunks},
             config_.farTerrainQualityMultiplier);
@@ -3281,6 +3418,11 @@ void Application::tickClusterMaintenance()
             (skipLodBands.lod0End + 2 * (world::ClusterChunkExtent - 1))
                 / world::ClusterChunkExtent);
         for (const auto& [coord, mask] : builtClusters_) {
+            if (clusterHorizontalDistanceChunks(coord, skipCenterChunk) <= skipLodBands.lod0End) {
+                skip.insert(coord);
+                continue;
+            }
+
             const auto dxCluster = coord.x - skipCenterCluster.x;
             const auto dzCluster = coord.z - skipCenterCluster.z;
             const auto adxCluster = dxCluster >= 0 ? dxCluster : -dxCluster;
@@ -3503,6 +3645,7 @@ void Application::tickClusterMaintenance()
                 const auto chebyshev = std::max({std::abs(dx), std::abs(dy), std::abs(dz)});
                 const auto horizontalChebyshev = std::max(std::abs(dx), std::abs(dz));
                 if (horizontalChebyshev < innerR) continue;
+                if (clusterHorizontalDistanceChunks(candidate, center) <= lodBands.lod0End) continue;
                 if (target.has_value() && chebyshev >= targetDistance) continue;
 
                 const auto it = builtClusters_.find(candidate);
@@ -3804,8 +3947,15 @@ void Application::tickRegionMaintenance()
     {
         std::unordered_set<world::RegionCoord, world::RegionCoordHash> skip;
         skip.reserve(builtRegions_.size());
+        const auto regionSkipBands =
+            world::computeLodBands(chunkRadius, config_.farTerrainQualityMultiplier);
         for (const auto& [coord, hashVal] : builtRegions_) {
             (void)hashVal;
+            if (regionHorizontalDistanceChunks(coord, center) <= regionSkipBands.lod2End) {
+                skip.insert(coord);
+                continue;
+            }
+
             const world::ClusterCoord clusterOrigin{
                 coord.x * world::RegionClusterExtent,
                 coord.y * world::RegionClusterExtent,
@@ -3910,10 +4060,6 @@ void Application::tickRegionMaintenance()
         // causes the region to rebuild ~1-3 ms per crossing. The
         // disk cache handles repeat builds in ~1 ms, so the cost is
         // bounded. Correctness > thrash avoidance.
-        const std::int64_t buildInnerRing = std::max<std::int64_t>(2,
-            (evictionLodBands.lod2End + 2 * (kRegionExt - 1)) / kRegionExt);
-        const std::int64_t evictInnerRing = buildInnerRing;
-
         // SURFACE ANCHOR (must mirror the build loop below): LOD3
         // surface regions live at fixed region.y, not the player's
         // current altitude. Evicting on |dy| > 1 from centerRegion.y
@@ -3929,7 +4075,6 @@ void Application::tickRegionMaintenance()
             const auto dz = it->first.z - centerRegion.z;
             const auto adx = dx >= 0 ? dx : -dx;
             const auto adz = dz >= 0 ? dz : -dz;
-            const auto chebyshev = std::max({adx, adz}); // horizontal only
 
             // Y axis: region must sit inside the surface anchor band
             // (currently a single region at y=0). Anything outside is
@@ -3940,7 +4085,8 @@ void Application::tickRegionMaintenance()
                                  || it->first.y > kSurfaceRegionYMax;
             // Inside the inner ring means LOD2/LOD0 owns this volume now;
             // we don't want stale LOD3 meshes rendering on top.
-            const bool insideInner = chebyshev < evictInnerRing;
+            const bool insideInner =
+                regionHorizontalDistanceChunks(it->first, center) <= evictionLodBands.lod2End;
 
             if (outOfRange || insideInner) {
                 clusterRenderer_->removeRegionMesh(it->first);
@@ -4128,6 +4274,9 @@ void Application::tickRegionMaintenance()
 
                 const world::RegionCoord candidate{
                     centerRegion.x + dx, ry, centerRegion.z + dz};
+                if (regionHorizontalDistanceChunks(candidate, center) <= lodBands.lod2End) {
+                    continue;
+                }
 
                 // Already built? Skip. LOD3 clipmaps are keyed by the
                 // terrain-version source hash and intentionally ignore

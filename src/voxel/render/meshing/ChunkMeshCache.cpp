@@ -29,11 +29,19 @@ void ChunkMeshCache::remove(world::ChunkCoord coord)
     meshes_.erase(coord);
 }
 
-std::vector<world::ChunkCoord> ChunkMeshCache::removeOutsideRadius(world::ChunkCoord center, int horizontalRadius, int verticalRadius)
+std::vector<world::ChunkCoord> ChunkMeshCache::removeOutsideRadius(
+    world::ChunkCoord center,
+    int horizontalRadius,
+    int verticalRadius,
+    const std::function<bool(world::ChunkCoord)>& keep)
 {
     std::vector<world::ChunkCoord> removed;
     for (auto it = meshes_.begin(); it != meshes_.end();) {
         const auto coord = it->first;
+        if (keep && keep(coord)) {
+            ++it;
+            continue;
+        }
         const auto dx = coord.x - center.x;
         const auto dy = coord.y - center.y;
         const auto dz = coord.z - center.z;

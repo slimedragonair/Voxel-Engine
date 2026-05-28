@@ -33,7 +33,8 @@ public:
         ChunkCoord center,
         int horizontalRadius,
         int verticalRadius,
-        std::size_t maxEvictions);
+        std::size_t maxEvictions,
+        const std::function<bool(ChunkCoord)>& keep = {});
 
     void reserve(std::size_t chunkCount);
     [[nodiscard]] std::size_t residentCount() const noexcept;

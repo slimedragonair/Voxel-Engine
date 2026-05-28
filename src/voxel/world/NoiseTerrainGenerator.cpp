@@ -263,7 +263,8 @@ std::uint64_t NoiseTerrainGenerator::terrainVersion() const noexcept
     //   0x8fa6d43027b91ce5 — Space B/C profile-driven moon/planet surfaces
     // ATGS v1.1: data-driven height profiles shape live surface heights.
     // ATGS v1.2: mountain profile easing / foothill blending.
-    std::uint64_t version = 0xb2e9c4a7d5086f13ULL;
+    // ATGS v1.3: weighted land profile blending and smoother profile activation.
+    std::uint64_t version = 0xc6f14a92b3d8075eULL;
     version = hashCombine(version, floatBits(settings_.minWorldY));
     version = hashCombine(version, floatBits(settings_.maxWorldY));
     version = hashCombine(version, floatBits(settings_.surfaceFrequency));

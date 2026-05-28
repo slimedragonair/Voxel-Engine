@@ -1183,6 +1183,29 @@ int main()
     const auto evictedMeshes = meshCache.removeOutsideRadius({10, 0, 0}, 8, 1);
     VOXEL_CHECK(evictedMeshes.size() == 1);
     VOXEL_CHECK(meshCache.size() == 1);
+    meshCache.store({100, 8, 100}, singleBlockMesh);
+    const auto protectedMeshEvictions = meshCache.removeOutsideRadius(
+        {0, 0, 0}, 1, 1,
+        [](voxel::world::ChunkCoord coord) {
+            return coord == voxel::world::ChunkCoord{100, 8, 100};
+        });
+    VOXEL_CHECK(protectedMeshEvictions.size() == 1);
+    VOXEL_CHECK(meshCache.find({100, 8, 100}) != nullptr);
+    meshCache.remove({100, 8, 100});
+
+    {
+        voxel::world::ChunkManager evictionChunks;
+        evictionChunks.createOrGet({100, 8, 100});
+        evictionChunks.createOrGet({101, 8, 100});
+        const auto evictedChunks = evictionChunks.evictOutsideRadius(
+            {0, 0, 0}, 1, 1, 8,
+            [](voxel::world::ChunkCoord coord) {
+                return coord == voxel::world::ChunkCoord{100, 8, 100};
+            });
+        VOXEL_CHECK(evictedChunks.size() == 1);
+        VOXEL_CHECK(evictionChunks.find({100, 8, 100}) != nullptr);
+        VOXEL_CHECK(evictionChunks.find({101, 8, 100}) == nullptr);
+    }
 
     voxel::save::RegionFileStore saveStore("build/test_saves/smoke_world");
     const auto savedDirty = voxel::save::WorldSaveService{}.saveDirtyChunks(chunks, saveStore);
