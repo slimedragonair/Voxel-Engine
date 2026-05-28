@@ -37,9 +37,15 @@ bool savedChunkMatchesGenerator(const Chunk& chunk, const IChunkGenerator& gener
         return true;
     }
 
-    // Preserve chunks that have likely player edits. Freshly generated
-    // chunks have revision 1; block edits bump beyond that. Legacy saves
-    // had no terrain-version field, so revision is the only safe signal.
+    // Known-version procedural chunks are safe to regenerate when stale.
+    // Edited chunks are written with terrainVersion=0 by Chunk::setBlock.
+    if (chunk.terrainVersion() != 0) {
+        return false;
+    }
+
+    // Legacy saves had no terrain-version field, so revision is the only
+    // safe edit signal there. Freshly generated chunks start at revision 1;
+    // block edits bump beyond that.
     return chunk.revision() > 1;
 }
 

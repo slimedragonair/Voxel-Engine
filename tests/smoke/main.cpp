@@ -1759,6 +1759,7 @@ int main()
         stale.fillSilently(voxel::world::makeBlockState(voxel::BlockTypeId{2}));
         stale.markGenerated();
         stale.setTerrainVersion(1);
+        stale.markGeometryDirty();
         staleStore.saveChunk(stale);
 
         voxel::world::ChunkManager staleChunks;
@@ -1795,7 +1796,7 @@ int main()
         VOXEL_CHECK(editedStats.generated == 0);
         const auto* preserved = editedChunks.find(editedCoord);
         VOXEL_CHECK(preserved != nullptr);
-        VOXEL_CHECK(preserved->terrainVersion() == 1);
+        VOXEL_CHECK(preserved->terrainVersion() == 0);
         VOXEL_CHECK(voxel::world::blockTypeOf(preserved->blockAt(0, 0, 0)).value == 9);
     }
 

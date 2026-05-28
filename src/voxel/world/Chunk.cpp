@@ -100,6 +100,7 @@ void Chunk::setBlock(int x, int y, int z, BlockStateId state)
     dirty_.collision = true;
     ++revision_;
     ++meshRevision_;
+    terrainVersion_ = 0;
 }
 
 void Chunk::setBlockSilently(int x, int y, int z, BlockStateId state)
@@ -190,7 +191,6 @@ void Chunk::markGenerated() noexcept
     dirty_.collision = true;
     ++revision_;
     ++meshRevision_;
-    terrainVersion_ = 0;
 }
 
 void Chunk::markLoaded(Revision revision, std::uint64_t terrainVersion) noexcept
