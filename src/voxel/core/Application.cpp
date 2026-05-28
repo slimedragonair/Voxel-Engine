@@ -2341,6 +2341,58 @@ const std::vector<world::ChunkRequest>& Application::streamingDispatchRequestsFo
         return true;
     };
 
+    // ATGS can put nearby surfaces many chunks above/below the player's
+    // current vertical band. Request a small bridge toward those surface
+    // slabs first; otherwise high terrain appears as a new LOD surface
+    // floating over old/low loaded chunks until vertical streaming catches up.
+    {
+        const auto center = streamingCenter();
+        const int vRadius = std::max(0, config_.streaming.verticalRenderDistanceChunks);
+        const std::int64_t loadedMinY = center.y - vRadius;
+        const std::int64_t loadedMaxY = center.y + vRadius;
+        const bool streamSpaceOnly = config_.enableSpacePhaseA
+            && static_cast<float>(center.y * world::ChunkSize) >= config_.space.nearSpaceStartY;
+        const int surfaceRadius = std::min(config_.streaming.renderDistanceChunks, 10);
+        const std::size_t surfaceBudget = std::max<std::size_t>(4U, targetCandidates / 3U);
+        std::size_t surfaceAdded = 0;
+        if (!streamSpaceOnly && surfaceRadius > 0) {
+            for (int ring = 0; ring <= surfaceRadius && surfaceAdded < surfaceBudget; ++ring) {
+                for (int dz = -ring; dz <= ring && surfaceAdded < surfaceBudget; ++dz) {
+                    for (int dx = -ring; dx <= ring && surfaceAdded < surfaceBudget; ++dx) {
+                        if (std::max(std::abs(dx), std::abs(dz)) != ring) {
+                            continue;
+                        }
+                        const auto chunkX = center.x + dx;
+                        const auto chunkZ = center.z + dz;
+                        const float worldX = static_cast<float>(chunkX * world::ChunkSize + world::ChunkSize / 2);
+                        const float worldZ = static_cast<float>(chunkZ * world::ChunkSize + world::ChunkSize / 2);
+                        const auto column = terrainGenerator_.sampleColumnAt(worldX, worldZ);
+                        const std::int64_t surfaceChunkY =
+                            world::floorDiv(static_cast<std::int64_t>(column.surfaceY), world::ChunkSize);
+                        if (surfaceChunkY >= loadedMinY && surfaceChunkY <= loadedMaxY) {
+                            continue;
+                        }
+
+                        const std::int64_t step = surfaceChunkY > loadedMaxY ? -1 : 1;
+                        const std::int64_t stopExclusive = surfaceChunkY > loadedMaxY ? loadedMaxY : loadedMinY;
+                        for (std::int64_t y = surfaceChunkY;
+                             y != stopExclusive && surfaceAdded < surfaceBudget;
+                             y += step) {
+                            if (y >= loadedMinY && y <= loadedMaxY) {
+                                break;
+                            }
+                            const float verticalBias = static_cast<float>(std::abs(y - center.y)) * 0.05F;
+                            const float horizontalBias = static_cast<float>((dx * dx) + (dz * dz)) * 0.15F;
+                            if (tryAppendRequest({{chunkX, y, chunkZ}, horizontalBias + verticalBias - 4.0F})) {
+                                ++surfaceAdded;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     const float nearRadius = std::max(4.0F, static_cast<float>(config_.streaming.renderDistanceChunks) * 0.45F);
     const float nearPriorityLimit = std::max(25.0F, nearRadius * nearRadius);
     const std::size_t nearTarget = std::min<std::size_t>(
@@ -2833,6 +2885,11 @@ void Application::tickClusterMaintenance()
         const auto evictCenterCluster = world::chunkToCluster(evictCenterChunk);
         const std::int64_t chunkRadiusForEvict =
             std::int64_t{config_.streaming.renderDistanceChunks};
+        const auto evictLodBands =
+            world::computeLodBands(chunkRadiusForEvict, config_.farTerrainQualityMultiplier);
+        const std::int64_t evictInnerR = std::max<std::int64_t>(1,
+            (evictLodBands.lod0End + 2 * (world::ClusterChunkExtent - 1))
+                / world::ClusterChunkExtent);
         const std::int64_t evictHorizR =
             std::max<std::int64_t>(3, chunkRadiusForEvict / world::ClusterChunkExtent + 4);
         const std::int64_t evictVertR =
@@ -2848,10 +2905,12 @@ void Application::tickClusterMaintenance()
             const auto adx = dx >= 0 ? dx : -dx;
             const auto ady = dy >= 0 ? dy : -dy;
             const auto adz = dz >= 0 ? dz : -dz;
+            const auto horizontalChebyshev = std::max(adx, adz);
             const bool outOfRange = (adx > evictHorizR)
                                  || (adz > evictHorizR)
                                  || (ady > evictVertR);
-            if (outOfRange && evicted < kMaxEvictionsPerTick) {
+            const bool insideFullChunkBand = horizontalChebyshev < evictInnerR;
+            if ((outOfRange || insideFullChunkBand) && evicted < kMaxEvictionsPerTick) {
                 clusterRenderer_->removeClusterMesh(it->first);
                 it = builtClusters_.erase(it);
                 ++evicted;
@@ -2887,7 +2946,23 @@ void Application::tickClusterMaintenance()
     {
         std::unordered_set<world::ClusterCoord, world::ClusterCoordHash> skip;
         skip.reserve(builtClusters_.size());
+        const auto skipCenterCluster = world::chunkToCluster(streamingCenter());
+        const auto skipLodBands = world::computeLodBands(
+            std::int64_t{config_.streaming.renderDistanceChunks},
+            config_.farTerrainQualityMultiplier);
+        const std::int64_t skipInnerR = std::max<std::int64_t>(1,
+            (skipLodBands.lod0End + 2 * (world::ClusterChunkExtent - 1))
+                / world::ClusterChunkExtent);
         for (const auto& [coord, mask] : builtClusters_) {
+            const auto dxCluster = coord.x - skipCenterCluster.x;
+            const auto dzCluster = coord.z - skipCenterCluster.z;
+            const auto adxCluster = dxCluster >= 0 ? dxCluster : -dxCluster;
+            const auto adzCluster = dzCluster >= 0 ? dzCluster : -dzCluster;
+            if (std::max(adxCluster, adzCluster) < skipInnerR) {
+                skip.insert(coord);
+                continue;
+            }
+
             const auto origin = world::clusterChunkOrigin(coord);
             bool allCoveredOrAbsent = true;
             bool anyResident = false;
@@ -3025,6 +3100,9 @@ void Application::tickClusterMaintenance()
     // the user's spec.
     const auto lodBands =
         world::computeLodBands(chunkRadius, config_.farTerrainQualityMultiplier);
+    const std::int64_t innerR = std::max<std::int64_t>(1,
+        (lodBands.lod0End + 2 * (world::ClusterChunkExtent - 1))
+            / world::ClusterChunkExtent);
     const std::int64_t outerR = std::max<std::int64_t>(2,
         (lodBands.lod2End + world::ClusterChunkExtent - 1) / world::ClusterChunkExtent);
     const std::int64_t outerRY =
@@ -3096,6 +3174,8 @@ void Application::tickClusterMaintenance()
                 const world::ClusterCoord candidate{
                     centerCluster.x + dx, centerCluster.y + dy, centerCluster.z + dz};
                 const auto chebyshev = std::max({std::abs(dx), std::abs(dy), std::abs(dz)});
+                const auto horizontalChebyshev = std::max(std::abs(dx), std::abs(dz));
+                if (horizontalChebyshev < innerR) continue;
                 if (target.has_value() && chebyshev >= targetDistance) continue;
 
                 const auto it = builtClusters_.find(candidate);

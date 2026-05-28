@@ -300,6 +300,45 @@ bool ClusterRenderer::createPipelines()
     return true;
 }
 
+std::uint32_t ClusterRenderer::allocateSceneEntryIndex() const noexcept
+{
+    for (std::uint32_t candidate = 0; candidate < kMaxClusterDrawCommands; ++candidate) {
+        bool used = false;
+        for (const auto& [coord, rec] : uploadedClusters_) {
+            (void)coord;
+            if (rec.sceneEntryIndex == candidate) {
+                used = true;
+                break;
+            }
+        }
+        if (used) {
+            continue;
+        }
+        for (const auto& [coord, rec] : uploadedRegions_) {
+            (void)coord;
+            if (rec.sceneEntryIndex == candidate) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            return candidate;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+void ClusterRenderer::releaseUploadedRecord(const UploadedCluster& record) noexcept
+{
+    gpu_->vertexArena.release({record.vertexOffset, record.vertexBytes});
+    gpu_->indexArena.release({record.indexOffset, record.indexBytes});
+    if (gpu_->sceneEntryBuffer.mapped != nullptr
+        && record.sceneEntryIndex != 0xFFFFFFFFu) {
+        auto* sceneBase = static_cast<ClusterSceneEntry*>(gpu_->sceneEntryBuffer.mapped);
+        sceneBase[record.sceneEntryIndex] = ClusterSceneEntry{};
+    }
+}
+
 ClusterRenderer::ClusterRenderer(VulkanRenderer& renderer)
     : renderer_(renderer),
       gpu_(std::make_unique<GpuResources>())
@@ -596,11 +635,17 @@ bool ClusterRenderer::uploadClusterMesh(world::ClusterCoord coord,
     //    Until 1C-4 ships, the immediate release is safe ONLY because
     //    we're not yet rendering cluster meshes (the draw path is
     //    stubbed). Documented here so the assumption is explicit.
+    const std::uint32_t sceneIdx = existing != uploadedClusters_.end()
+        ? existing->second.sceneEntryIndex
+        : allocateSceneEntryIndex();
+    if (sceneIdx == 0xFFFFFFFFu) {
+        gpu_->vertexArena.release(vertexSlice);
+        gpu_->indexArena.release(indexSlice);
+        Logger::warn("ClusterRenderer::uploadClusterMesh: scene entry table full");
+        return false;
+    }
     if (existing != uploadedClusters_.end()) {
-        gpu_->vertexArena.release(
-            {existing->second.vertexOffset, existing->second.vertexBytes});
-        gpu_->indexArena.release(
-            {existing->second.indexOffset, existing->second.indexBytes});
+        releaseUploadedRecord(existing->second);
     }
 
     // 4. Build a scene entry. Origin is the cluster's world block origin.
@@ -671,9 +716,6 @@ bool ClusterRenderer::uploadClusterMesh(world::ClusterCoord coord,
     //    Phase 1C-4 will add the GPU-side cluster scene entry sync (this
     //    buffer is host-visible so the write is immediately visible to
     //    the device once the next frame's command buffer is submitted).
-    std::uint32_t sceneIdx = existing != uploadedClusters_.end()
-        ? existing->second.sceneEntryIndex
-        : static_cast<std::uint32_t>(uploadedClusters_.size());
     if (gpu_->sceneEntryBuffer.mapped != nullptr) {
         auto* sceneBase = static_cast<ClusterSceneEntry*>(gpu_->sceneEntryBuffer.mapped);
         sceneBase[sceneIdx] = entry;
@@ -701,22 +743,7 @@ void ClusterRenderer::removeClusterMesh(world::ClusterCoord coord)
     if (it == uploadedClusters_.end()) {
         return;
     }
-    // Phase 1C-4 TODO: defer the release until the GPU finishes its
-    // in-flight draws referencing this slice (via the renderer's
-    // retire-buffer queue). Immediate release is safe today only
-    // because cluster rendering isn't wired into recordFrameCommands
-    // yet — there are no in-flight draws against these slices.
-    gpu_->vertexArena.release({it->second.vertexOffset, it->second.vertexBytes});
-    gpu_->indexArena.release({it->second.indexOffset, it->second.indexBytes});
-
-    // Zero out the scene entry slot so a stale draw command can't reach
-    // it before the GPU sees the eviction. Indices > 0 mean an active
-    // draw range; clearing indexCount to 0 makes the cull shader skip it.
-    if (gpu_->sceneEntryBuffer.mapped != nullptr
-        && it->second.sceneEntryIndex != 0xFFFFFFFFu) {
-        auto* sceneBase = static_cast<ClusterSceneEntry*>(gpu_->sceneEntryBuffer.mapped);
-        sceneBase[it->second.sceneEntryIndex] = ClusterSceneEntry{};
-    }
+    releaseUploadedRecord(it->second);
     uploadedClusters_.erase(it);
 }
 
@@ -787,6 +814,10 @@ bool ClusterRenderer::uploadRegionMesh(world::RegionCoord coord,
         && existingRegion->second.sourceRevisionsHash == mesh.sourceRevisionsHash) {
         return true; // already current
     }
+    if (existingRegion != uploadedRegions_.end()) {
+        releaseUploadedRecord(existingRegion->second);
+        uploadedRegions_.erase(existingRegion);
+    }
 
     // Reuse the cluster upload routine. It allocates arenas, stages,
     // writes the scene entry, and inserts into uploadedClusters_[aliasCoord]
@@ -821,13 +852,7 @@ void ClusterRenderer::removeRegionMesh(world::RegionCoord coord)
     if (it == uploadedRegions_.end()) {
         return;
     }
-    gpu_->vertexArena.release({it->second.vertexOffset, it->second.vertexBytes});
-    gpu_->indexArena.release({it->second.indexOffset, it->second.indexBytes});
-    if (gpu_->sceneEntryBuffer.mapped != nullptr
-        && it->second.sceneEntryIndex != 0xFFFFFFFFu) {
-        auto* sceneBase = static_cast<ClusterSceneEntry*>(gpu_->sceneEntryBuffer.mapped);
-        sceneBase[it->second.sceneEntryIndex] = ClusterSceneEntry{};
-    }
+    releaseUploadedRecord(it->second);
     uploadedRegions_.erase(it);
 }
 
@@ -899,7 +924,7 @@ void ClusterRenderer::recordDraws(VkCommandBuffer commandBuffer,
         return 1.0F;
     };
     std::vector<DrawEntry> draws;
-    draws.reserve(uploadedClusters_.size());
+    draws.reserve(uploadedClusters_.size() + uploadedRegions_.size());
 
     // The scene-entry buffer holds the per-cluster bounds + draw params
     // we wrote in uploadClusterMesh. Read them back to populate the

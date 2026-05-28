@@ -195,6 +195,7 @@ void RegionFileStore::saveChunk(const world::Chunk& chunk)
 
     const auto coord = chunk.coord();
     const auto revision = chunk.revision();
+    const auto terrainVersion = chunk.terrainVersion();
     const std::uint16_t version = kSaveFormatVersion;
     const auto bodySize = static_cast<std::uint32_t>(body.size());
 
@@ -205,6 +206,7 @@ void RegionFileStore::saveChunk(const world::Chunk& chunk)
     output.write(reinterpret_cast<const char*>(&coord.y), sizeof(coord.y));
     output.write(reinterpret_cast<const char*>(&coord.z), sizeof(coord.z));
     output.write(reinterpret_cast<const char*>(&revision), sizeof(revision));
+    output.write(reinterpret_cast<const char*>(&terrainVersion), sizeof(terrainVersion));
     output.write(reinterpret_cast<const char*>(&bodySize), sizeof(bodySize));
     output.write(reinterpret_cast<const char*>(body.data()), static_cast<std::streamsize>(body.size()));
     knownChunkFiles_.insert(chunk.coord());
@@ -238,6 +240,7 @@ std::optional<world::Chunk> RegionFileStore::loadChunkFromRoot(const std::filesy
     std::uint16_t flags = 0;
     world::ChunkCoord storedCoord{};
     Revision revision = 0;
+    std::uint64_t terrainVersion = 0;
     std::uint32_t bodySize = 0;
 
     input.read(reinterpret_cast<char*>(&version), sizeof(version));
@@ -246,16 +249,25 @@ std::optional<world::Chunk> RegionFileStore::loadChunkFromRoot(const std::filesy
     input.read(reinterpret_cast<char*>(&storedCoord.y), sizeof(storedCoord.y));
     input.read(reinterpret_cast<char*>(&storedCoord.z), sizeof(storedCoord.z));
     input.read(reinterpret_cast<char*>(&revision), sizeof(revision));
-    input.read(reinterpret_cast<char*>(&bodySize), sizeof(bodySize));
     if (!input) {
         return std::nullopt;
     }
-    if (version != kSaveFormatVersion) {
-        Logger::warn("Save format version " + std::to_string(version) + " is incompatible (expected "
+    if (version < 1 || version > kSaveFormatVersion) {
+        Logger::warn("Save format version " + std::to_string(version) + " is incompatible (supported 1.."
                      + std::to_string(kSaveFormatVersion) + "); ignoring file.");
         return std::nullopt;
     }
     if (!(storedCoord == coord)) {
+        return std::nullopt;
+    }
+    if (version >= 2) {
+        input.read(reinterpret_cast<char*>(&terrainVersion), sizeof(terrainVersion));
+        if (!input) {
+            return std::nullopt;
+        }
+    }
+    input.read(reinterpret_cast<char*>(&bodySize), sizeof(bodySize));
+    if (!input) {
         return std::nullopt;
     }
 
@@ -287,7 +299,7 @@ std::optional<world::Chunk> RegionFileStore::loadChunkFromRoot(const std::filesy
     if (!decodeBody(body, chunk)) {
         return std::nullopt;
     }
-    chunk.markLoaded(revision);
+    chunk.markLoaded(revision, terrainVersion);
     return chunk;
 }
 

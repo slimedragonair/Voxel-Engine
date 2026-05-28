@@ -155,7 +155,7 @@ public:
     void setTerrainDefinitions(const TerrainDefinitionRegistry* terrainDefinitions) noexcept;
     [[nodiscard]] TerrainColumnPrepass buildColumnPrepass(TerrainColumnCoord coord) const;
     [[nodiscard]] TerrainColumnKey prepassKey(TerrainColumnCoord coord) const noexcept;
-    [[nodiscard]] std::uint64_t terrainVersion() const noexcept;
+    [[nodiscard]] std::uint64_t terrainVersion() const noexcept override;
 
     // Phase 5: sample full column data (biome, surface height, river status,
     // etc.) at an arbitrary world position. Used by the foliage stage to look

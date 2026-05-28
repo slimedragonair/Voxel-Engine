@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,25 @@ core::JobPriority priorityForRequest(float distancePriority)
         return core::JobPriority::High;
     }
     return core::JobPriority::Medium;
+}
+
+bool savedChunkMatchesGenerator(const Chunk& chunk, const IChunkGenerator& generator) noexcept
+{
+    const std::uint64_t expectedTerrainVersion = generator.terrainVersion();
+    if (expectedTerrainVersion == 0 || chunk.terrainVersion() == expectedTerrainVersion) {
+        return true;
+    }
+
+    // Known-version procedural chunks are safe to regenerate when stale.
+    // Edited chunks are written with terrainVersion=0 by Chunk::setBlock.
+    if (chunk.terrainVersion() != 0) {
+        return false;
+    }
+
+    // Legacy saves had no terrain-version field, so revision is the only
+    // safe edit signal there. Freshly generated chunks start at revision 1;
+    // block edits bump beyond that.
+    return chunk.revision() > 1;
 }
 
 } // namespace
@@ -56,12 +76,15 @@ ChunkPipelineStats ChunkPipeline::processRequests(
         const auto loadStart = std::chrono::steady_clock::now();
         if (auto loaded = saveStore.loadChunk(request.coord)) {
             core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
-            chunks.store(std::move(*loaded));
-            ++stats.loaded;
-            stats.installedChunks.push_back(request.coord);
-            continue;
+            if (savedChunkMatchesGenerator(*loaded, generator)) {
+                chunks.store(std::move(*loaded));
+                ++stats.loaded;
+                stats.installedChunks.push_back(request.coord);
+                continue;
+            }
+        } else {
+            core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
         }
-        core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
 
         auto& chunk = chunks.createOrGet(request.coord);
         chunk.setState(ChunkState::Generating);
@@ -196,12 +219,15 @@ ChunkPipelineStats ChunkPipeline::processRequestsAsync(
             const auto loadStart = std::chrono::steady_clock::now();
             if (auto loaded = saveStore.loadChunk(request.coord)) {
                 core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
-                chunks.store(std::move(*loaded));
-                ++stats.loaded;
-                stats.installedChunks.push_back(request.coord);
-                return false;
+                if (savedChunkMatchesGenerator(*loaded, generator)) {
+                    chunks.store(std::move(*loaded));
+                    ++stats.loaded;
+                    stats.installedChunks.push_back(request.coord);
+                    return false;
+                }
+            } else {
+                core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
             }
-            core::recordTimer(stats.loadTime, elapsedUs(loadStart, std::chrono::steady_clock::now()));
         }
 
         if (!mailbox.tryBeginGeneration(request.coord)) {
@@ -286,11 +312,13 @@ ChunkPipelineStats ChunkPipeline::processRequestsAsync(
                     const auto loadStart = std::chrono::steady_clock::now();
                     if (auto loaded = save::RegionFileStore::loadChunkFromRoot(*workerLoadRoot, coord)) {
                         const auto loadEnd = std::chrono::steady_clock::now();
-                        result.chunk = std::move(*loaded);
-                        result.loadTimeUs = elapsedUs(loadStart, loadEnd);
-                        result.loadedFromSave = true;
-                        mailboxPtr->pushGeneration(std::move(result));
-                        continue;
+                        if (savedChunkMatchesGenerator(*loaded, *generatorPtr)) {
+                            result.chunk = std::move(*loaded);
+                            result.loadTimeUs = elapsedUs(loadStart, loadEnd);
+                            result.loadedFromSave = true;
+                            mailboxPtr->pushGeneration(std::move(result));
+                            continue;
+                        }
                     }
 
                     chunksToGenerate.emplace_back(coord);

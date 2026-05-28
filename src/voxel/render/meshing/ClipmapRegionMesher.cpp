@@ -40,7 +40,7 @@ constexpr int kMaxVertexY = 127;
 
 // Bump when clipmap mesh packing/windowing changes so the LOD3 disk cache
 // rejects stale meshes instead of reloading old artifacts.
-constexpr std::uint64_t kClipmapRegionMeshVersion = 0x4f7032a87c6d51b9ULL;
+constexpr std::uint64_t kClipmapRegionMeshVersion = 0x7d09e5eb2b1046c3ULL;
 
 // Map TerrainSurfaceKind to a block state ID drawn from the noise
 // generator's settings. Falls back to `Land` (grass) for unknown.
@@ -183,6 +183,7 @@ ClusterMesh ClipmapRegionMesher::build(
     int diagSurfaceYMax = std::numeric_limits<int>::min();
     int diagVertexYMin = std::numeric_limits<int>::max();
     int diagVertexYMax = std::numeric_limits<int>::min();
+    int diagInsideSlabSamples = 0;
 
     for (int sz = 0; sz < kSamples; ++sz) {
         const float wz = worldOriginZ + static_cast<float>(sz) * kWorldBlocksPerCell;
@@ -212,12 +213,10 @@ ClusterMesh ClipmapRegionMesher::build(
             const std::int8_t verticalSide = relY < 0
                 ? std::int8_t{-1}
                 : (relY > 511 ? std::int8_t{1} : std::int8_t{0});
-            // Clamp to [0, kMaxVertexY]. Values outside this range mean
-            // the surface is above or below the region's vertical
-            // window; we flatten to the boundary. Visible artifact
-            // only when the player can see distant mountains/canyons
-            // taller than the LOD3 region's 508-block vertical range
-            // — sub-pixel at LOD3 distance.
+            // Clamp only as a safety net. The emit pass rejects any
+            // quad with a corner outside this vertical slab. This prevents
+            // y=1 regions from turning ordinary lowland terrain into a
+            // giant flat sheet at world Y=512.
             if (vertexY < 0) vertexY = 0;
             if (vertexY > kMaxVertexY) vertexY = kMaxVertexY;
 
@@ -234,6 +233,7 @@ ClusterMesh ClipmapRegionMesher::build(
                 if (surfaceY > diagSurfaceYMax) diagSurfaceYMax = surfaceY;
                 if (vertexY < diagVertexYMin) diagVertexYMin = vertexY;
                 if (vertexY > diagVertexYMax) diagVertexYMax = vertexY;
+                if (verticalSide == 0) ++diagInsideSlabSamples;
             }
         }
     }
@@ -251,6 +251,7 @@ ClusterMesh ClipmapRegionMesher::build(
             + ".." + std::to_string(diagSurfaceYMax) + "]"
             + " vertexY=[" + std::to_string(diagVertexYMin)
             + ".." + std::to_string(diagVertexYMax) + "]"
+            + " insideSlabSamples=" + std::to_string(diagInsideSlabSamples)
             + " expectedWorldY=[" + std::to_string(worldYMin)
             + ".." + std::to_string(worldYMax) + "]";
         voxel::Logger::info(line);
@@ -294,11 +295,9 @@ ClusterMesh ClipmapRegionMesher::build(
             const auto& s11 = grid[static_cast<std::size_t>((cz + 1) * kSamples + (cx + 1))];
             const auto& s01 = grid[static_cast<std::size_t>((cz + 1) * kSamples + cx)];
 
-            const bool allBelow = s00.verticalSide < 0 && s10.verticalSide < 0
-                && s11.verticalSide < 0 && s01.verticalSide < 0;
-            const bool allAbove = s00.verticalSide > 0 && s10.verticalSide > 0
-                && s11.verticalSide > 0 && s01.verticalSide > 0;
-            if (allBelow || allAbove) {
+            const bool allInsideVerticalSlab = s00.verticalSide == 0 && s10.verticalSide == 0
+                && s11.verticalSide == 0 && s01.verticalSide == 0;
+            if (!allInsideVerticalSlab) {
                 continue;
             }
 
