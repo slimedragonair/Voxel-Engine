@@ -1,10 +1,12 @@
 #include <voxel/core/Application.hpp>
 #include <voxel/core/Logger.hpp>
+#include <voxel/save/WorldRegistry.hpp>
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -67,6 +69,55 @@ bool hasFlag(int argc, char** argv, std::string_view name)
         }
     }
     return false;
+}
+
+std::string parseStringFlag(int argc, char** argv, std::string_view name, std::string fallback)
+{
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != name) {
+            continue;
+        }
+        return std::string{argv[i + 1]};
+    }
+    return fallback;
+}
+
+std::uint64_t parseUint64Flag(int argc, char** argv, std::string_view name, std::uint64_t fallback)
+{
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string_view{argv[i]} != name) {
+            continue;
+        }
+        std::uint64_t value = 0;
+        const std::string_view raw{argv[i + 1]};
+        const auto result = std::from_chars(raw.data(), raw.data() + raw.size(), value);
+        if (result.ec == std::errc{}) {
+            return value;
+        }
+    }
+    return fallback;
+}
+
+// N3: shows the graphical title screen by spinning up an Application in
+// title-screen mode, then returns whichever world the player chose (or
+// std::nullopt if they hit Quit).
+std::optional<voxel::save::WorldEntry> runTitleScreen(const voxel::ApplicationConfig& templateConfig)
+{
+    voxel::ApplicationConfig titleConfig = templateConfig;
+    titleConfig.titleScreenMode = true;
+    titleConfig.maxFrames = 0;          // title screen never auto-quits.
+    titleConfig.debugStartPosition.reset();
+    titleConfig.debugStartNoclip = false;
+
+    voxel::Application titleApp(titleConfig);
+    voxel::Logger::info("Showing title screen...");
+    const int titleCode = titleApp.run();
+    if (titleCode == voxel::Application::kReturnToTitle) {
+        if (const auto& chosen = titleApp.nextWorldRequest(); chosen.has_value()) {
+            return *chosen;
+        }
+    }
+    return std::nullopt;
 }
 
 bool solidSpaceFeature(voxel::world::SpaceFeatureType type) noexcept
@@ -248,7 +299,63 @@ int main(int argc, char** argv)
         }
     }
 
-    voxel::Application app(config);
-    voxel::Logger::info("Starting sandbox");
-    return app.run();
+    // N3: resolve which world to enter. `--world <name>` skips the title
+    // screen (creating the world if it doesn't exist); `--frames N`
+    // (headless) falls back to dev_world; otherwise the graphical title
+    // screen runs and the player picks. On in-game "Quit to Title" /
+    // "Switch" (returned via Application::kReturnToTitle), we loop back
+    // and show the title screen again.
+    voxel::save::WorldRegistry worldRegistry(config.paths.savesDirectory());
+    const std::string worldFlag = parseStringFlag(argc, argv, "--world", "");
+    const std::uint64_t seedFlag = parseUint64Flag(argc, argv, "--seed", 0);
+    const bool headlessSkip = config.maxFrames > 0 || hasFlag(argc, argv, "--skip-menu");
+
+    std::optional<voxel::save::WorldEntry> pendingSwitchTarget;
+    while (true) {
+        std::optional<voxel::save::WorldEntry> chosen;
+        if (pendingSwitchTarget.has_value()) {
+            chosen = std::move(pendingSwitchTarget);
+            pendingSwitchTarget.reset();
+        } else if (!worldFlag.empty()) {
+            if (auto existing = worldRegistry.findByName(worldFlag)) {
+                chosen = std::move(existing);
+            } else {
+                chosen = worldRegistry.createWorld(worldFlag, seedFlag);
+            }
+        } else if (headlessSkip) {
+            const auto devRoot = worldRegistry.savesDirectory() / "dev_world";
+            if (auto existing = worldRegistry.findByDirectory(devRoot)) {
+                chosen = std::move(existing);
+            } else {
+                chosen = worldRegistry.createWorld("Dev World", seedFlag);
+            }
+        } else {
+            chosen = runTitleScreen(config);
+        }
+        if (!chosen.has_value()) {
+            voxel::Logger::info("Player quit from the title screen.");
+            return 0;
+        }
+
+        config.paths.setActiveWorldRoot(chosen->root);
+        config.worldSeed = chosen->descriptor.seed;
+        config.worldDisplayName = chosen->descriptor.name;
+        config.titleScreenMode = false;
+
+        voxel::Application app(config);
+        voxel::Logger::info("Starting world \"" + chosen->descriptor.name
+            + "\" (seed=" + std::to_string(chosen->descriptor.seed)
+            + ", root=" + chosen->root.string() + ")");
+        const int code = app.run();
+        if (code == voxel::Application::kReturnToTitle) {
+            if (const auto& next = app.nextWorldRequest(); next.has_value()) {
+                pendingSwitchTarget = *next;
+            }
+            // Drop the headless frame budget so the next iteration actually
+            // shows the title screen (rather than recursing into headless).
+            config.maxFrames = 0;
+            continue;
+        }
+        return code;
+    }
 }

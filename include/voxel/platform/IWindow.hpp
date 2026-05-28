@@ -39,6 +39,7 @@ enum class Key {
     I,
     R,
     F3,    // debug overlay toggle
+    F9,    // M2: World Manager overlay toggle
     Escape
 };
 

@@ -214,6 +214,9 @@ Application::Application(ApplicationConfig config)
       terrainGenerator_(terrainSettingsForConfig(config_)),
       spaceEnvironment_(config_.space),
       saveStore_(config_.paths.saveRoot()),
+      // M2: WorldRegistry indexes the parent saves/ directory so the World
+      // Manager overlay can enumerate sibling worlds (not just the active one).
+      worldRegistry_(config_.paths.savesDirectory()),
       blockEditor_(blocks_)
 {
 }
@@ -233,13 +236,19 @@ int Application::run()
         tick();
         ++frame;
 
+        if (returnToTitleRequested_) {
+            // M2/N3: World Manager / Title Screen asked the launcher to
+            // loop back. We still let shutdown() run so player state +
+            // inventory + world descriptor get persisted before we exit.
+            break;
+        }
         if (config_.maxFrames > 0 && frame >= config_.maxFrames) {
             break;
         }
     }
 
     shutdown();
-    return 0;
+    return returnToTitleRequested_ ? kReturnToTitle : kExitNormal;
 }
 
 void Application::initialize()
@@ -299,7 +308,13 @@ void Application::initialize()
     kineticCatalog_ = blocks_.buildKineticCatalog();
     player_.setWalkSpeed(config_.playerWalkSpeed);
     player_.setFlySpeed(config_.playerFlySpeed);
-    if (config_.debugStartPosition.has_value()) {
+    if (config_.titleScreenMode) {
+        // N1: title screen mode never touches a world. Skip player state +
+        // inventory loads entirely; their save paths point at whatever
+        // default world the launcher built with, which we'd rather not
+        // accidentally clobber.
+        Logger::info("Application running in title-screen mode (no world loaded).");
+    } else if (config_.debugStartPosition.has_value()) {
         player_.setPosition(*config_.debugStartPosition);
         player_.setNoclip(config_.debugStartNoclip);
         playerSpawnResolved_ = true;
@@ -307,6 +322,25 @@ void Application::initialize()
             "Debug start position x=" + std::to_string(config_.debugStartPosition->x)
             + " y=" + std::to_string(config_.debugStartPosition->y)
             + " z=" + std::to_string(config_.debugStartPosition->z));
+    } else if (auto saved = playerStateSaveService_.load(config_.paths.saveRoot()); saved.has_value()) {
+        // L2: restore the player exactly where they logged out, including
+        // their look direction and noclip toggle. A saved state overrides
+        // the spawn-resolver path that otherwise hunts for the surface.
+        player_.setPosition(saved->position);
+        player_.setLook(saved->yawRadians, saved->pitchRadians);
+        player_.setNoclip(saved->noclip);
+        playerSpawnResolved_ = true;
+        Logger::info(
+            "Loaded player state x=" + std::to_string(saved->position.x)
+            + " y=" + std::to_string(saved->position.y)
+            + " z=" + std::to_string(saved->position.z));
+    }
+    // L2: restore inventory if a saved one exists. The creative-seed path
+    // above already populated the default contents; loading overwrites those
+    // slots with whatever the player had last session.
+    if (!config_.titleScreenMode
+        && playerInventorySaveService_.load(config_.paths.saveRoot(), playerInventory_, items_)) {
+        Logger::info("Loaded player inventory from " + config_.paths.saveRoot().string());
     }
     maxLightPropagationsPerTick_ = config_.workBudget.maxLightingPerTick;
     physics_.initialize();
@@ -510,6 +544,15 @@ void Application::tick()
     // frame's recorded counters. The 1-frame lag is invisible at 60+ FPS and
     // avoids the chicken-and-egg of "ImGui::Render must happen before world
     // rendering, but some counters aren't available until after."
+    // N1: title-screen mode skips all world systems and only drives the
+    // ImGui menu + presents. This keeps a single Application path (window,
+    // Vulkan, ImGui all live) instead of forking into a "menu app" /
+    // "game app" split. tickTitleScreen() handles its own beginFrame.
+    if (config_.titleScreenMode) {
+        tickTitleScreen();
+        return;
+    }
+
     renderer_.beginImGuiFrame();
     debugOverlay_.draw(debugOverlayVisible_);
     drawRuntimeSettingsOverlay();
@@ -629,6 +672,18 @@ void Application::tick()
             Logger::info(std::string{"Debug overlay: "} + (debugOverlayVisible_ ? "on" : "off"));
         }
         debugOverlayToggleLatch_ = overlayKeyDown;
+
+        // M2: F9 toggles the in-game World Manager. Free the cursor on open
+        // so the player can immediately click ImGui buttons.
+        const bool worldMgrKeyDown = window_->keyDown(platform::Key::F9);
+        if (worldMgrKeyDown && !worldManagerToggleLatch_) {
+            worldManagerOpen_ = !worldManagerOpen_;
+            if (worldManagerOpen_) {
+                window_->setCursorCaptured(false);
+            }
+            Logger::info(std::string{"World manager: "} + (worldManagerOpen_ ? "open" : "closed"));
+        }
+        worldManagerToggleLatch_ = worldMgrKeyDown;
 
         updateSpaceEnvironment(freecam_ ? renderer_.debugCameraDPosition() : player_.dEyePosition());
 
@@ -1285,6 +1340,278 @@ void Application::resizeWorkerPool(std::size_t workerCount)
     jobs_.stop();
     jobs_.start(workerCount);
     config_.workerCount = workerCount;
+}
+
+void Application::drawWorldManagerOverlay()
+{
+    worldManagerCaptureMouse_ = false;
+    if (!worldManagerOpen_) {
+        return;
+    }
+    const auto worlds = worldRegistry_.listWorlds();
+    if (worldRenameBuffers_.size() != worlds.size()) {
+        worldRenameBuffers_.assign(worlds.size(), std::string{});
+    }
+    for (std::size_t i = 0; i < worlds.size(); ++i) {
+        if (worldRenameBuffers_[i].empty()) {
+            worldRenameBuffers_[i] = worlds[i].descriptor.name;
+        }
+    }
+    ImGui::SetNextWindowSize(ImVec2(560, 440), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(80, 80), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("World Manager (F9)", &worldManagerOpen_)) {
+        ImGui::End();
+        return;
+    }
+    worldManagerCaptureMouse_ = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    if (!config_.worldDisplayName.empty()) {
+        ImGui::TextDisabled("Currently playing: %s (seed=%llu)",
+            config_.worldDisplayName.c_str(),
+            static_cast<unsigned long long>(config_.worldSeed));
+    }
+    ImGui::Separator();
+    ImGui::Text("Worlds in %s", worldRegistry_.savesDirectory().string().c_str());
+    if (worlds.empty()) {
+        ImGui::TextDisabled("  (no saved worlds yet)");
+    }
+    for (std::size_t i = 0; i < worlds.size(); ++i) {
+        const auto& entry = worlds[i];
+        ImGui::PushID(static_cast<int>(i));
+        const bool isActive = entry.root == config_.paths.saveRoot();
+        if (isActive) {
+            ImGui::TextColored(ImVec4(0.65F, 0.95F, 0.55F, 1.0F),
+                "[active] %s", entry.descriptor.name.c_str());
+        } else {
+            ImGui::Text("%s", entry.descriptor.name.c_str());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(" seed=%llu",
+            static_cast<unsigned long long>(entry.descriptor.seed));
+        char buffer[128];
+        std::snprintf(buffer, sizeof(buffer), "%s", worldRenameBuffers_[i].c_str());
+        ImGui::SetNextItemWidth(280.0F);
+        if (ImGui::InputText("##rename", buffer, sizeof(buffer))) {
+            worldRenameBuffers_[i] = buffer;
+        }
+        ImGui::SameLine();
+        const bool nameChanged = worldRenameBuffers_[i] != entry.descriptor.name
+            && !worldRenameBuffers_[i].empty();
+        ImGui::BeginDisabled(!nameChanged);
+        if (ImGui::Button("Apply rename")) {
+            (void)worldRegistry_.renameWorld(entry, worldRenameBuffers_[i]);
+            worldRenameBuffers_[i].clear();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(isActive);
+        if (ImGui::Button("Switch")) {
+            nextWorldRequest_ = entry;
+            returnToTitleRequested_ = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(isActive);
+        if (ImGui::Button("Delete")) {
+            pendingDeleteIndex_ = static_cast<int>(i);
+            ImGui::OpenPopup("Confirm delete");
+        }
+        ImGui::EndDisabled();
+        if (ImGui::BeginPopupModal("Confirm delete", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Delete world \"%s\"?", entry.descriptor.name.c_str());
+            ImGui::Text("This removes all chunks, player state, and inventory.");
+            if (ImGui::Button("Yes, delete", ImVec2(120, 0))) {
+                if (pendingDeleteIndex_ == static_cast<int>(i)) {
+                    (void)worldRegistry_.deleteWorld(entry);
+                    worldRenameBuffers_.clear();
+                }
+                pendingDeleteIndex_ = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                pendingDeleteIndex_ = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    if (ImGui::Button("Save & Quit to Title")) {
+        nextWorldRequest_.reset();
+        returnToTitleRequested_ = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(returns to the launcher menu)");
+    ImGui::End();
+}
+
+void Application::tickTitleScreen()
+{
+    // N1: beginFrame() was already called by tick(). Drive only ImGui + present.
+    window_->setCursorCaptured(false);
+    renderer_.beginImGuiFrame();
+    drawTitleScreen();
+    renderer_.endImGuiFrame();
+    renderer_.endFrame();
+    ++frameIndex_;
+}
+
+void Application::drawTitleScreen()
+{
+    const auto worlds = worldRegistry_.listWorlds();
+    if (worldRenameBuffers_.size() != worlds.size()) {
+        worldRenameBuffers_.assign(worlds.size(), std::string{});
+    }
+    for (std::size_t i = 0; i < worlds.size(); ++i) {
+        if (worldRenameBuffers_[i].empty()) {
+            worldRenameBuffers_[i] = worlds[i].descriptor.name;
+        }
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 center = viewport->GetCenter();
+    constexpr float kPanelWidth = 680.0F;
+    constexpr float kPanelHeight = 540.0F;
+    ImGui::SetNextWindowPos(ImVec2(center.x, center.y), ImGuiCond_Always, ImVec2(0.5F, 0.5F));
+    ImGui::SetNextWindowSize(ImVec2(kPanelWidth, kPanelHeight), ImGuiCond_Always);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoTitleBar;
+    if (!ImGui::Begin("##TitleScreen", nullptr, flags)) {
+        ImGui::End();
+        return;
+    }
+    const char* kTitle = "AETHERFORGE: INFINITE CREATION";
+    const char* kSubtitle = "A voxel sandbox.";
+    {
+        ImGui::SetWindowFontScale(2.0F);
+        const auto titleSize = ImGui::CalcTextSize(kTitle);
+        ImGui::SetCursorPosX((kPanelWidth - titleSize.x) * 0.5F);
+        ImGui::TextColored(ImVec4(0.85F, 0.95F, 1.0F, 1.0F), "%s", kTitle);
+        ImGui::SetWindowFontScale(1.0F);
+        const auto subSize = ImGui::CalcTextSize(kSubtitle);
+        ImGui::SetCursorPosX((kPanelWidth - subSize.x) * 0.5F);
+        ImGui::TextDisabled("%s", kSubtitle);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+    ImGui::Text("Saved Worlds");
+    ImGui::BeginChild("##WorldList", ImVec2(0, 220), true, ImGuiWindowFlags_HorizontalScrollbar);
+    if (worlds.empty()) {
+        ImGui::TextDisabled("  (no worlds yet — create one below)");
+    }
+    for (std::size_t i = 0; i < worlds.size(); ++i) {
+        const auto& entry = worlds[i];
+        ImGui::PushID(static_cast<int>(i));
+        const std::string label = entry.descriptor.name
+            + "  (seed=" + std::to_string(entry.descriptor.seed) + ")";
+        if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) {
+            if (ImGui::IsMouseDoubleClicked(0)) {
+                nextWorldRequest_ = entry;
+                returnToTitleRequested_ = true;
+            }
+        }
+        char buffer[128];
+        std::snprintf(buffer, sizeof(buffer), "%s", worldRenameBuffers_[i].c_str());
+        ImGui::SetNextItemWidth(220.0F);
+        if (ImGui::InputText("##rename", buffer, sizeof(buffer))) {
+            worldRenameBuffers_[i] = buffer;
+        }
+        ImGui::SameLine();
+        const bool nameChanged = worldRenameBuffers_[i] != entry.descriptor.name
+            && !worldRenameBuffers_[i].empty();
+        ImGui::BeginDisabled(!nameChanged);
+        if (ImGui::Button("Apply")) {
+            (void)worldRegistry_.renameWorld(entry, worldRenameBuffers_[i]);
+            worldRenameBuffers_[i].clear();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Play")) {
+            nextWorldRequest_ = entry;
+            returnToTitleRequested_ = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete")) {
+            titleDeleteIndex_ = static_cast<int>(i);
+            ImGui::OpenPopup("Confirm delete");
+        }
+        if (ImGui::BeginPopupModal("Confirm delete", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Delete world \"%s\"?", entry.descriptor.name.c_str());
+            ImGui::Text("This removes all chunks, player state, and inventory.");
+            if (ImGui::Button("Yes, delete", ImVec2(120, 0))) {
+                if (titleDeleteIndex_ == static_cast<int>(i)) {
+                    (void)worldRegistry_.deleteWorld(entry);
+                    worldRenameBuffers_.clear();
+                }
+                titleDeleteIndex_ = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                titleDeleteIndex_ = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    ImGui::Spacing();
+    ImGui::Text("Create New World");
+    {
+        char nameBuf[128];
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", titleNewWorldName_.c_str());
+        ImGui::SetNextItemWidth(300.0F);
+        if (ImGui::InputTextWithHint("##name", "World name (blank = \"New World\")",
+                                     nameBuf, sizeof(nameBuf))) {
+            titleNewWorldName_ = nameBuf;
+        }
+        ImGui::SameLine();
+        char seedBuf[64];
+        std::snprintf(seedBuf, sizeof(seedBuf), "%s", titleNewWorldSeedText_.c_str());
+        ImGui::SetNextItemWidth(160.0F);
+        if (ImGui::InputTextWithHint("##seed", "seed (blank = random)",
+                                     seedBuf, sizeof(seedBuf),
+                                     ImGuiInputTextFlags_CharsDecimal)) {
+            titleNewWorldSeedText_ = seedBuf;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Create & Play")) {
+            std::string name = titleNewWorldName_;
+            if (name.empty()) {
+                name = "New World";
+            }
+            std::uint64_t seed = 0;
+            if (!titleNewWorldSeedText_.empty()) {
+                const auto& s = titleNewWorldSeedText_;
+                const auto result = std::from_chars(s.data(), s.data() + s.size(), seed);
+                if (result.ec != std::errc{}) {
+                    seed = 0;
+                }
+            }
+            auto created = worldRegistry_.createWorld(std::move(name), seed);
+            if (created.has_value()) {
+                nextWorldRequest_ = std::move(*created);
+                returnToTitleRequested_ = true;
+                titleNewWorldName_.clear();
+                titleNewWorldSeedText_.clear();
+                worldRenameBuffers_.clear();
+            }
+        }
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("Quit", ImVec2(120, 0))) {
+        nextWorldRequest_.reset();
+        returnToTitleRequested_ = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("  Double-click a world to enter it, or click Play.");
+    ImGui::End();
 }
 
 void Application::seedCreativeInventory()
@@ -4396,6 +4723,33 @@ void Application::shutdown()
 {
     if (!initialized_) {
         return;
+    }
+
+    // L5: persist player + inventory + bump world descriptor's lastPlayedAtMs
+    // *before* draining the chunk save coordinator, so even if the coordinator
+    // hits an error we at least preserve the player's position.
+    if (!config_.titleScreenMode) {
+        const auto& worldRoot = config_.paths.saveRoot();
+        save::PlayerStateSnapshot snapshot{};
+        snapshot.position = player_.dPosition();
+        snapshot.yawRadians = player_.yawRadians();
+        snapshot.pitchRadians = player_.pitchRadians();
+        snapshot.noclip = player_.noclip();
+        if (!playerStateSaveService_.save(worldRoot, snapshot)) {
+            Logger::warn("Failed to write player state under " + worldRoot.string());
+        }
+        if (!playerInventorySaveService_.save(worldRoot, playerInventory_, items_)) {
+            Logger::warn("Failed to write player inventory under " + worldRoot.string());
+        }
+        // Update world.json with the current last-played time. We update the
+        // descriptor in place so existing fields (seed, name, createdAtMs)
+        // survive untouched.
+        save::WorldRegistry registry(worldRoot.parent_path());
+        auto descriptor = registry.readDescriptor(worldRoot);
+        if (descriptor.has_value()) {
+            descriptor->lastPlayedAtMs = save::WorldRegistry::nowUnixMs();
+            (void)registry.writeDescriptor(worldRoot, *descriptor);
+        }
     }
 
     drainOutstandingJobsForShutdown();

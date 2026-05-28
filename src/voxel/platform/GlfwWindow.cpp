@@ -184,6 +184,9 @@ bool GlfwWindow::keyDown(Key key) const
     case Key::F3:
         glfwKey = GLFW_KEY_F3;
         break;
+    case Key::F9:
+        glfwKey = GLFW_KEY_F9;
+        break;
     case Key::Escape:
         glfwKey = GLFW_KEY_ESCAPE;
         break;
