@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -109,11 +111,16 @@ std::optional<voxel::save::WorldEntry> runTitleScreen(const voxel::ApplicationCo
     titleConfig.debugStartPosition.reset();
     titleConfig.debugStartNoclip = false;
 
-    voxel::Application titleApp(titleConfig);
+    // O2: Application owns Vulkan handles, arenas, registries, JobSystem,
+    // and a *lot* of in-line members — sizeof(Application) is large enough
+    // that putting it on the stack here (plus main's own `config` copy and
+    // this function's `titleConfig` copy) blows the 1 MB Windows default
+    // stack. Heap-allocate it so only a unique_ptr sits on the stack.
+    auto titleApp = std::make_unique<voxel::Application>(titleConfig);
     voxel::Logger::info("Showing title screen...");
-    const int titleCode = titleApp.run();
+    const int titleCode = titleApp->run();
     if (titleCode == voxel::Application::kReturnToTitle) {
-        if (const auto& chosen = titleApp.nextWorldRequest(); chosen.has_value()) {
+        if (const auto& chosen = titleApp->nextWorldRequest(); chosen.has_value()) {
             return *chosen;
         }
     }
@@ -246,6 +253,17 @@ int main(int argc, char** argv)
     config.name = "AetherForge: Infinite Creation Sandbox";
     config.maxFrames = parseFrameLimit(argc, argv);
 
+    // O1: resolve assets/ via the executable's own location so the engine
+    // works the same whether launched from Explorer (CWD = exe dir),
+    // from `build/Release/`, or from a shell at the project root. argv[0]
+    // contains the path the OS used to launch us; on Windows from Explorer
+    // it's a full absolute path, which makes the upward walk trivial.
+    const std::filesystem::path argv0 = (argc > 0 && argv[0] != nullptr)
+        ? std::filesystem::path{argv[0]}
+        : std::filesystem::path{};
+    config.paths = voxel::core::Paths{voxel::core::Paths::resolveEngineRoot(argv0)};
+    voxel::Logger::info("Engine root: " + config.paths.root().string());
+
     // F4: streamer radius is X/Z horizontal × Y vertical. Defaults to a
     // modest 8×2 (17×5×17 = 1445 chunks); pass `--render-distance N` for
     // stress runs (16 ≈ 33×5×33 = 5445, 32 ≈ 65×5×65 = 21125).
@@ -342,13 +360,16 @@ int main(int argc, char** argv)
         config.worldDisplayName = chosen->descriptor.name;
         config.titleScreenMode = false;
 
-        voxel::Application app(config);
+        // O2: Heap-allocate for the same reason runTitleScreen does — keeps
+        // Application off main's call stack so deep ImGui or worker frames
+        // can't push us over the limit.
+        auto app = std::make_unique<voxel::Application>(config);
         voxel::Logger::info("Starting world \"" + chosen->descriptor.name
             + "\" (seed=" + std::to_string(chosen->descriptor.seed)
             + ", root=" + chosen->root.string() + ")");
-        const int code = app.run();
+        const int code = app->run();
         if (code == voxel::Application::kReturnToTitle) {
-            if (const auto& next = app.nextWorldRequest(); next.has_value()) {
+            if (const auto& next = app->nextWorldRequest(); next.has_value()) {
                 pendingSwitchTarget = *next;
             }
             // Drop the headless frame budget so the next iteration actually
