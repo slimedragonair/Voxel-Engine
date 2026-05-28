@@ -166,8 +166,11 @@ add_library(voxel_engine STATIC
     src/voxel/render/meshing/GreedyMesher.cpp
     src/voxel/render/meshing/HybridMeshingGpuSystem.cpp
     src/voxel/save/PlayerInventorySaveService.cpp
+    src/voxel/save/PlayerStateSaveService.cpp
     src/voxel/save/RegionFileStore.cpp
     src/voxel/save/SaveCoordinator.cpp
+    src/voxel/save/WorldRegistry.cpp
+    src/voxel/app/ConsoleMainMenu.cpp
     src/voxel/save/WorldSaveService.cpp
     src/voxel/world/BitPackedArray.cpp
     src/voxel/world/BlockLightCatalog.cpp

@@ -38,8 +38,11 @@
 #include <voxel/render/meshing/ClusterGpuMeshing.hpp>
 #include <voxel/render/meshing/ClusterMeshDiskCache.hpp>
 #include <voxel/render/meshing/HybridMeshingGpuSystem.hpp>
+#include <voxel/save/PlayerInventorySaveService.hpp>
+#include <voxel/save/PlayerStateSaveService.hpp>
 #include <voxel/save/RegionFileStore.hpp>
 #include <voxel/save/SaveCoordinator.hpp>
+#include <voxel/save/WorldRegistry.hpp>
 #include <voxel/save/WorldSaveService.hpp>
 #include <voxel/world/BlockEditor.hpp>
 #include <voxel/world/BlockCollisionCatalog.hpp>
@@ -76,6 +79,20 @@ struct ApplicationConfig {
     int height{720};
     std::size_t maxFrames{0};
     core::Paths paths{};
+    // L3: explicit world seed. 0 means "let the terrain generator use its
+    // built-in default". The sandbox menu fills this in from the chosen
+    // WorldDescriptor so every save reloads with the seed it was created on.
+    std::uint64_t worldSeed{0};
+    // L3: optional human-readable name (matches WorldDescriptor::name).
+    // Logged + shown in the window title so the player can see which world
+    // they loaded into.
+    std::string worldDisplayName{};
+    // N1: when true, Application boots into a title-screen-only mode — no
+    // world is generated, streamed, lit, or simulated. `tick()` short-
+    // circuits into the title-screen ImGui path. Used by the sandbox
+    // launcher on first run so the player picks a world graphically before
+    // any world resources are committed.
+    bool titleScreenMode{false};
     world::StreamingSettings streaming{};
     world::ChunkPipelineSettings chunkPipeline{};
     std::size_t maxChunkMeshesPerTick{32};
@@ -158,7 +175,20 @@ public:
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
+    // M2: run() return codes. `kReturnToTitle` lets the launcher loop back
+    // to the main-menu picker without exiting the process — used by the
+    // World Manager's "Save & Quit to Title" / "Switch to <world>" buttons.
+    static constexpr int kExitNormal = 0;
+    static constexpr int kReturnToTitle = 2;
+
     int run();
+
+    // After run() returns kReturnToTitle, this may carry a direct switch
+    // target so the launcher can bypass the menu and re-enter immediately.
+    [[nodiscard]] const std::optional<save::WorldEntry>& nextWorldRequest() const noexcept
+    {
+        return nextWorldRequest_;
+    }
 
 private:
     struct MeshInstallStats {
@@ -225,6 +255,10 @@ private:
     void updateSelectedBlock();
     void updateSpellCasting();
     void drawRuntimeSettingsOverlay();
+    // M2: the graphical World Manager. Drawn during the ImGui frame between
+    // beginImGuiFrame() and endImGuiFrame() in tick(); only renders when
+    // `worldManagerOpen_` is true (F9 toggles it).
+    void drawWorldManagerOverlay();
     void resizeWorkerPool(std::size_t workerCount);
     void seedCreativeInventory();
     [[nodiscard]] core::RuntimeCounters handleWorldInteraction();
@@ -408,6 +442,28 @@ private:
     save::RegionFileStore saveStore_;
     save::WorldSaveService worldSaveService_;
     save::SaveCoordinator saveCoordinator_;
+    // L2/L5: per-world player IO. Both services are stateless; they hold the
+    // world root via the path argument on each save/load call.
+    save::PlayerInventorySaveService playerInventorySaveService_{};
+    save::PlayerStateSaveService playerStateSaveService_{};
+    // M2: the in-game World Manager overlay queries this for rename/delete and
+    // for the "Switch to another world" affordance. It points at the global
+    // saves directory rather than the active world root.
+    save::WorldRegistry worldRegistry_;
+    // F9 toggles the World Manager overlay. `returnToTitleRequested_` makes
+    // run() exit with kReturnToTitle so sandbox main can loop back to the
+    // launcher menu. `nextWorldRequest_` carries the direct switch target so
+    // we can bypass the menu and load straight into a different world.
+    bool worldManagerOpen_{false};
+    bool worldManagerToggleLatch_{false};
+    bool returnToTitleRequested_{false};
+    std::optional<save::WorldEntry> nextWorldRequest_{};
+    // ImGui state for the World Manager: per-world inline rename buffer and
+    // the index of the world the player asked to delete (so the confirm
+    // popup knows which one to act on).
+    std::vector<std::string> worldRenameBuffers_;
+    int pendingDeleteIndex_{-1};
+    bool worldManagerCaptureMouse_{false};
     world::VoxelRaycaster raycaster_;
     world::BlockEditor blockEditor_;
     world::BlockEditQueue blockEditQueue_;

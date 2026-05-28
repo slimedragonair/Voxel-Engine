@@ -24,9 +24,28 @@ std::filesystem::path Paths::coreDataRoot() const
     return assetsRoot() / "data" / "core";
 }
 
+std::filesystem::path Paths::savesDirectory() const
+{
+    return root_ / "saves";
+}
+
 std::filesystem::path Paths::saveRoot() const
 {
-    return root_ / "saves" / "dev_world";
+    if (!activeWorldRootOverride_.empty()) {
+        return activeWorldRootOverride_;
+    }
+    return savesDirectory() / activeWorldDir_;
+}
+
+void Paths::setActiveWorldDirectory(std::string directoryName)
+{
+    activeWorldDir_ = std::move(directoryName);
+    activeWorldRootOverride_.clear();
+}
+
+void Paths::setActiveWorldRoot(std::filesystem::path absoluteRoot)
+{
+    activeWorldRootOverride_ = std::move(absoluteRoot);
 }
 
 } // namespace voxel::core
