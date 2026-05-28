@@ -27,7 +27,8 @@ Chunk::Chunk(const Chunk& other)
       light_(other.light_ ? std::make_unique<ChunkLightData>(*other.light_) : nullptr),
       dirty_(other.dirty_),
       revision_(other.revision_),
-      meshRevision_(other.meshRevision_)
+      meshRevision_(other.meshRevision_),
+      terrainVersion_(other.terrainVersion_)
 {
 }
 
@@ -43,6 +44,7 @@ Chunk& Chunk::operator=(const Chunk& other)
     dirty_ = other.dirty_;
     revision_ = other.revision_;
     meshRevision_ = other.meshRevision_;
+    terrainVersion_ = other.terrainVersion_;
     return *this;
 }
 
@@ -61,6 +63,7 @@ Chunk Chunk::cloneBlocksOnly() const
     copy.dirty_ = dirty_;
     copy.revision_ = revision_;
     copy.meshRevision_ = meshRevision_;
+    copy.terrainVersion_ = terrainVersion_;
     return copy;
 }
 
@@ -143,6 +146,16 @@ Revision Chunk::meshRevision() const noexcept
     return meshRevision_;
 }
 
+std::uint64_t Chunk::terrainVersion() const noexcept
+{
+    return terrainVersion_;
+}
+
+void Chunk::setTerrainVersion(std::uint64_t version) noexcept
+{
+    terrainVersion_ = version;
+}
+
 const ChunkDirtyFlags& Chunk::dirty() const noexcept
 {
     return dirty_;
@@ -177,14 +190,16 @@ void Chunk::markGenerated() noexcept
     dirty_.collision = true;
     ++revision_;
     ++meshRevision_;
+    terrainVersion_ = 0;
 }
 
-void Chunk::markLoaded(Revision revision) noexcept
+void Chunk::markLoaded(Revision revision, std::uint64_t terrainVersion) noexcept
 {
     state_ = ChunkState::Resident;
     dirty_ = {};
     revision_ = revision;
     meshRevision_ = revision;
+    terrainVersion_ = terrainVersion;
 }
 
 void Chunk::markGeometryDirty() noexcept

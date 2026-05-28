@@ -74,13 +74,15 @@ public:
 
     [[nodiscard]] Revision revision() const noexcept;
     [[nodiscard]] Revision meshRevision() const noexcept;
+    [[nodiscard]] std::uint64_t terrainVersion() const noexcept;
+    void setTerrainVersion(std::uint64_t version) noexcept;
     [[nodiscard]] const ChunkDirtyFlags& dirty() const noexcept;
     void clearDirty() noexcept;
     void clearSaveDirty() noexcept;
     void clearMeshDirtyOnly() noexcept;
     void clearLightingDirtyOnly() noexcept;
     void markGenerated() noexcept;
-    void markLoaded(Revision revision = 0) noexcept;
+    void markLoaded(Revision revision = 0, std::uint64_t terrainVersion = 0) noexcept;
     void markGeometryDirty() noexcept;
     void markMeshDirtyNoRevision() noexcept;
     void markLightingDirtyNoRevision() noexcept;
@@ -130,6 +132,7 @@ private:
     ChunkDirtyFlags dirty_{};
     Revision revision_{0};
     Revision meshRevision_{0};
+    std::uint64_t terrainVersion_{0};
 };
 
 } // namespace voxel::world

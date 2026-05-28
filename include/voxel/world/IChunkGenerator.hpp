@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include <voxel/world/Chunk.hpp>
@@ -25,6 +26,7 @@ public:
         }
     }
     [[nodiscard]] virtual TerrainGenerationMode lastGenerationMode() const noexcept { return TerrainGenerationMode::Direct; }
+    [[nodiscard]] virtual std::uint64_t terrainVersion() const noexcept { return 0; }
 };
 
 } // namespace voxel::world

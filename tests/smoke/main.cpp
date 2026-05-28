@@ -1694,12 +1694,14 @@ int main()
         original.setBlock(31, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{8}));
         original.setBlock(0, 31, 0, voxel::world::makeBlockState(voxel::BlockTypeId{9}));
         original.setBlock(0, 0, 31, voxel::world::makeBlockState(voxel::BlockTypeId{3}));
+        original.setTerrainVersion(0x123456789abcdef0ULL);
         const auto originalRevision = original.revision();
         store.saveChunk(original);
 
         const auto loaded = store.loadChunk({3, 4, 5});
         VOXEL_CHECK(loaded.has_value());
         VOXEL_CHECK(loaded->revision() == originalRevision);
+        VOXEL_CHECK(loaded->terrainVersion() == 0x123456789abcdef0ULL);
         VOXEL_CHECK(voxel::world::blockTypeOf(loaded->blockAt(0, 0, 0)).value == 2);
         VOXEL_CHECK(voxel::world::blockTypeOf(loaded->blockAt(31, 0, 0)).value == 8);
         VOXEL_CHECK(voxel::world::blockTypeOf(loaded->blockAt(0, 31, 0)).value == 9);
@@ -1721,6 +1723,80 @@ int main()
         }
         const auto corrupt = store.loadChunk({100, 0, 0});
         VOXEL_CHECK(!corrupt.has_value());
+    }
+
+    // Stale procedural saves are regenerated when the terrain version changes,
+    // but edited chunks are preserved by revision.
+    {
+        class VersionedFillGenerator final : public voxel::world::IChunkGenerator {
+        public:
+            VersionedFillGenerator(voxel::BlockStateId block, std::uint64_t version)
+                : block_(block), version_(version) {}
+
+            void generate(voxel::world::Chunk& chunk) override
+            {
+                chunk.fillSilently(block_);
+                chunk.markGenerated();
+                chunk.setTerrainVersion(version_);
+            }
+
+            [[nodiscard]] std::uint64_t terrainVersion() const noexcept override
+            {
+                return version_;
+            }
+
+        private:
+            voxel::BlockStateId block_;
+            std::uint64_t version_;
+        };
+
+        const std::filesystem::path saveRoot{"build/test_saves/stale_terrain_world"};
+        std::filesystem::remove_all(saveRoot);
+        voxel::save::RegionFileStore staleStore(saveRoot);
+
+        const voxel::world::ChunkCoord staleCoord{41, 0, 0};
+        voxel::world::Chunk stale(staleCoord);
+        stale.fillSilently(voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+        stale.markGenerated();
+        stale.setTerrainVersion(1);
+        staleStore.saveChunk(stale);
+
+        voxel::world::ChunkManager staleChunks;
+        VersionedFillGenerator version2(voxel::world::makeBlockState(voxel::BlockTypeId{8}), 2);
+        const auto staleStats = voxel::world::ChunkPipeline{}.processRequests(
+            staleChunks,
+            staleStore,
+            version2,
+            std::vector<voxel::world::ChunkRequest>{{staleCoord, 0.0F}},
+            voxel::world::ChunkPipelineSettings{});
+        VOXEL_CHECK(staleStats.generated == 1);
+        VOXEL_CHECK(staleStats.loaded == 0);
+        const auto* regenerated = staleChunks.find(staleCoord);
+        VOXEL_CHECK(regenerated != nullptr);
+        VOXEL_CHECK(regenerated->terrainVersion() == 2);
+        VOXEL_CHECK(voxel::world::blockTypeOf(regenerated->blockAt(0, 0, 0)).value == 8);
+
+        const voxel::world::ChunkCoord editedCoord{42, 0, 0};
+        voxel::world::Chunk edited(editedCoord);
+        edited.fillSilently(voxel::world::makeBlockState(voxel::BlockTypeId{2}));
+        edited.markGenerated();
+        edited.setTerrainVersion(1);
+        edited.setBlock(0, 0, 0, voxel::world::makeBlockState(voxel::BlockTypeId{9}));
+        staleStore.saveChunk(edited);
+
+        voxel::world::ChunkManager editedChunks;
+        const auto editedStats = voxel::world::ChunkPipeline{}.processRequests(
+            editedChunks,
+            staleStore,
+            version2,
+            std::vector<voxel::world::ChunkRequest>{{editedCoord, 0.0F}},
+            voxel::world::ChunkPipelineSettings{});
+        VOXEL_CHECK(editedStats.loaded == 1);
+        VOXEL_CHECK(editedStats.generated == 0);
+        const auto* preserved = editedChunks.find(editedCoord);
+        VOXEL_CHECK(preserved != nullptr);
+        VOXEL_CHECK(preserved->terrainVersion() == 1);
+        VOXEL_CHECK(voxel::world::blockTypeOf(preserved->blockAt(0, 0, 0)).value == 9);
     }
 
     // Mesh job: snapshot copy is consistent with main-thread chunk state.

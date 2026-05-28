@@ -419,6 +419,25 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     return lerp(value, stepped, strength);
 }
 
+[[nodiscard]] float mountainInfluence(const WorldShapeSignals& s) noexcept
+{
+    const float stress = smooth01(remap(s.tectonicStress, 0.58F, 0.92F, 0.0F, 1.0F));
+    const float erosionGate = smooth01(remap(0.58F - s.erosion, 0.0F, 0.74F, 0.0F, 1.0F));
+    const float peakGate = smooth01(remap(s.peaksValleys, -0.20F, 0.72F, 0.0F, 1.0F));
+    return smooth01(std::clamp(stress * erosionGate * (0.55F + peakGate * 0.45F), 0.0F, 1.0F));
+}
+
+[[nodiscard]] float highlandsSurfaceY(
+    const WorldShapeSignals& s,
+    const NoiseTerrainSettings& settings) noexcept
+{
+    const float landT = smooth01(remap(s.continentalness, -0.06F, 0.82F, 0.0F, 1.0F));
+    const float detail = std::clamp(s.detail, -1.0F, 1.0F);
+    const float amp = std::max(1.0F, settings.surfaceAmplitude);
+    const float peak01 = smooth01(s.peaksValleys * 0.5F + 0.5F);
+    return settings.seaLevel + 72.0F + landT * (amp * 1.28F) + peak01 * 78.0F + detail * (amp * 0.30F);
+}
+
 [[nodiscard]] float terrainClassSurfaceY(
     TerrainClass terrainClass,
     const WorldShapeSignals& s,
@@ -449,20 +468,21 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
         const float stress = smooth01(s.tectonicStress);
         const float jagged = lowErosion * peak01;
         const float ridge = std::pow(std::max(0.0F, s.peaksValleys * 0.5F + 0.5F), 1.6F);
-        return settings.seaLevel
+        const float mountainY = settings.seaLevel
             + 170.0F
             + landT * 68.0F
             + stress * settings.mountainBoost * 0.66F
             + jagged * settings.mountainBoost * 0.34F
             + ridge * 48.0F
             + detail * (amp * 0.24F);
+        return lerp(highlandsSurfaceY(s, settings), mountainY, mountainInfluence(s));
     }
     case TerrainClass::Plateau: {
         const float raw = settings.plateauHeight + landT * (amp * 0.50F) + detail * (amp * 0.26F);
         return terrace(raw / 340.0F, 7.0F, 0.58F) * 340.0F;
     }
     case TerrainClass::Highlands:
-        return settings.seaLevel + 72.0F + landT * (amp * 1.28F) + peak01 * 78.0F + detail * (amp * 0.30F);
+        return highlandsSurfaceY(s, settings);
     case TerrainClass::Volcanic:
         return settings.seaLevel + 58.0F + s.volcanism * 190.0F + s.tectonicStress * 84.0F + detail * (amp * 0.33F);
     case TerrainClass::Polar:
@@ -534,7 +554,10 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     // portion of the class generator so existing seeds do not snap to a new
     // surface when a pack only tightens ranges slightly.
     constexpr float kProfileBlend = 0.68F;
-    return lerp(currentSurfaceY, profiledY, kProfileBlend);
+    const float classBlend = terrainClass == TerrainClass::Mountains
+        ? mountainInfluence(signals)
+        : 1.0F;
+    return lerp(currentSurfaceY, profiledY, kProfileBlend * classBlend);
 }
 
 [[nodiscard]] TerrainBiomeId biomeIdFromDefinitionId(const std::string& id, float temperature) noexcept
@@ -987,7 +1010,8 @@ std::uint64_t NoiseTerrainGenerator::terrainVersion() const noexcept
     //   0x84d2f519ab70c631 — Space B/C (landable planet voxel bodies)
     //   0x8fa6d43027b91ce5 — Space B/C profile-driven moon/planet surfaces
     // ATGS v1.1: data-driven height profiles shape live surface heights.
-    std::uint64_t version = 0xa6d52b90f4831c7eULL;
+    // ATGS v1.2: mountain profile easing / foothill blending.
+    std::uint64_t version = 0xb2e9c4a7d5086f13ULL;
     version = hashCombine(version, floatBits(settings_.minWorldY));
     version = hashCombine(version, floatBits(settings_.maxWorldY));
     version = hashCombine(version, floatBits(settings_.surfaceFrequency));
@@ -1450,6 +1474,7 @@ bool NoiseTerrainGenerator::generateSpaceChunk(Chunk& chunk)
     }
 
     chunk.markGenerated();
+    chunk.setTerrainVersion(terrainVersion());
     return true;
 }
 
@@ -1471,6 +1496,7 @@ void NoiseTerrainGenerator::generateWithPrepass(Chunk& chunk, const TerrainColum
     // Early-exit: nothing to fill above OR below this chunk's vertical slab.
     if (chunkBaseBlockY > bounds.maxSurfaceBlockY && bounds.seaTopForChunk < 0) {
         chunk.markGenerated();
+        chunk.setTerrainVersion(terrainVersion());
         return;
     }
 
@@ -1513,6 +1539,7 @@ void NoiseTerrainGenerator::generateWithPrepass(Chunk& chunk, const TerrainColum
     runFoliageStage(ctx);
 
     chunk.markGenerated();
+    chunk.setTerrainVersion(terrainVersion());
 }
 
 void NoiseTerrainGenerator::generate(Chunk& chunk)

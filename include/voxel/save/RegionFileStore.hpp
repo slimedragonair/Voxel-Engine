@@ -15,6 +15,7 @@ namespace voxel::save {
 //   flags      = uint16  (bit 0 = body compressed with Zstd)
 //   coord      = int64 x 3
 //   revision   = uint64
+//   terrainVer = uint64  (version >= 2; 0 = unknown/legacy)
 //   body       = (raw OR Zstd-compressed) body bytes
 //
 // Body layout (uncompressed):
@@ -28,7 +29,7 @@ namespace voxel::save {
 // the first time you run after upgrading.
 class RegionFileStore final : public ISaveStore {
 public:
-    static constexpr std::uint16_t kSaveFormatVersion = 1;
+    static constexpr std::uint16_t kSaveFormatVersion = 2;
 
     explicit RegionFileStore(std::filesystem::path root = "saves/dev_world");
 
