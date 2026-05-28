@@ -51,7 +51,8 @@ std::vector<ChunkCoord> ChunkManager::evictOutsideRadius(
     ChunkCoord center,
     int horizontalRadius,
     int verticalRadius,
-    std::size_t maxEvictions)
+    std::size_t maxEvictions,
+    const std::function<bool(ChunkCoord)>& keep)
 {
     std::vector<ChunkCoord> evicted;
     evicted.reserve(std::min<std::size_t>(maxEvictions, chunks_.size()));
@@ -59,6 +60,10 @@ std::vector<ChunkCoord> ChunkManager::evictOutsideRadius(
     for (auto it = chunks_.begin(); it != chunks_.end() && evicted.size() < maxEvictions;) {
         const auto coord = it->first;
         const auto& chunk = *it->second;
+        if (keep && keep(coord)) {
+            ++it;
+            continue;
+        }
 
         const auto dx = coord.x - center.x;
         const auto dy = coord.y - center.y;

@@ -238,6 +238,7 @@ private:
     void drainOutstandingJobsForShutdown();
     void updateAutomationDebug();
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingRequestsForFrame();
+    void refreshSurfaceVisibilityRequests(world::ChunkCoord center, bool streamSpaceOnly);
     [[nodiscard]] const std::vector<world::ChunkRequest>& streamingDispatchRequestsForFrame(
         const std::vector<world::ChunkRequest>& requests);
     [[nodiscard]] int streamingForwardBucket(core::Vec3 forward) const noexcept;
@@ -464,6 +465,14 @@ private:
     double lastPlayerCursorY_{0.0};
     BlockStateId selectedPlaceBlock_{};
     std::vector<world::ChunkRequest> cachedStreamingRequests_;
+    std::vector<world::ChunkRequest> surfaceVisibilityRequests_;
+    std::unordered_set<world::ChunkCoord, world::ChunkCoordHash> surfaceVisibilityRetainSet_;
+    world::ChunkCoord cachedSurfaceVisibilityCenter_{};
+    int cachedSurfaceVisibilityRenderDistance_{-1};
+    int cachedSurfaceVisibilityVerticalDistance_{-1};
+    int cachedSurfaceVisibilityForwardBucket_{-1};
+    bool cachedSurfaceVisibilitySpaceOnly_{false};
+    bool surfaceVisibilityCacheValid_{false};
     std::vector<world::ChunkRequest> streamingDispatchRequests_;
     std::vector<world::ChunkMeshResult> pendingMeshResults_;
     std::optional<PendingHybridMeshJob> pendingHybridMeshJob_;

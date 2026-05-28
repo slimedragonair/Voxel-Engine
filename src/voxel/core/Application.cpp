@@ -2026,7 +2026,10 @@ void Application::evictFarMeshCache()
     const auto center = streamingCenter();
     const int h = config_.streaming.renderDistanceChunks + 2;
     const int v = config_.streaming.verticalRenderDistanceChunks + 1;
-    const auto removed = meshCache_.removeOutsideRadius(center, h, v);
+    const auto keepSurfaceChunk = [this](world::ChunkCoord coord) {
+        return surfaceVisibilityRetainSet_.count(coord) != 0;
+    };
+    const auto removed = meshCache_.removeOutsideRadius(center, h, v, keepSurfaceChunk);
     for (const auto coord : removed) {
         renderer_.removeUploadedMesh(coord);
     }
@@ -2057,7 +2060,7 @@ void Application::evictFarMeshCache()
         const int chunkH = config_.streaming.renderDistanceChunks + 12;
         const int chunkV = config_.streaming.verticalRenderDistanceChunks + 6;
         const auto evictedChunks = chunks_.evictOutsideRadius(
-            center, chunkH, chunkV, kMaxChunkEvictionsPerTick);
+            center, chunkH, chunkV, kMaxChunkEvictionsPerTick, keepSurfaceChunk);
         if (!evictedChunks.empty()) {
             // Mirror the log shape of the mesh eviction so it's easy to
             // see both streams in the same log scan.
@@ -2143,6 +2146,106 @@ void Application::updateAutomationDebug()
 
 }
 
+void Application::refreshSurfaceVisibilityRequests(world::ChunkCoord center, bool streamSpaceOnly)
+{
+    const int renderDistance = std::max(0, config_.streaming.renderDistanceChunks);
+    const int verticalDistance = std::max(0, config_.streaming.verticalRenderDistanceChunks);
+    const int forwardBucket = streamingForwardBucket(player_.forwardVector());
+    if (surfaceVisibilityCacheValid_
+        && cachedSurfaceVisibilityCenter_ == center
+        && cachedSurfaceVisibilityRenderDistance_ == renderDistance
+        && cachedSurfaceVisibilityVerticalDistance_ == verticalDistance
+        && cachedSurfaceVisibilityForwardBucket_ == forwardBucket
+        && cachedSurfaceVisibilitySpaceOnly_ == streamSpaceOnly) {
+        return;
+    }
+
+    cachedSurfaceVisibilityCenter_ = center;
+    cachedSurfaceVisibilityRenderDistance_ = renderDistance;
+    cachedSurfaceVisibilityVerticalDistance_ = verticalDistance;
+    cachedSurfaceVisibilityForwardBucket_ = forwardBucket;
+    cachedSurfaceVisibilitySpaceOnly_ = streamSpaceOnly;
+    surfaceVisibilityCacheValid_ = true;
+    surfaceVisibilityRequests_.clear();
+    surfaceVisibilityRetainSet_.clear();
+
+    if (streamSpaceOnly || renderDistance <= 0) {
+        return;
+    }
+
+    // Vertical render distance still bounds hidden underground/interior slabs.
+    // This surface pass only keeps the visible terrain skin alive when ATGS
+    // puts a valley, seabed, or peak many chunks above/below the player.
+    constexpr int kMaxSurfaceVisibilityRadius = 24;
+    constexpr int kSurfaceSkirtChunksBelow = 1;
+    const int surfaceRadius = std::min(renderDistance, kMaxSurfaceVisibilityRadius);
+    const auto forward = player_.forwardVector();
+    const float forwardLength = std::sqrt((forward.x * forward.x) + (forward.z * forward.z));
+    const float forwardX = forwardLength > 0.0F ? forward.x / forwardLength : 0.0F;
+    const float forwardZ = forwardLength > 0.0F ? forward.z / forwardLength : 0.0F;
+
+    const auto addSurfaceRequest = [&](std::int64_t chunkX,
+                                       std::int64_t chunkY,
+                                       std::int64_t chunkZ,
+                                       int dx,
+                                       int dz,
+                                       float layerBias) {
+        const world::ChunkCoord coord{chunkX, chunkY, chunkZ};
+        if (!surfaceVisibilityRetainSet_.insert(coord).second) {
+            return;
+        }
+        const float horizontalDistance2 = static_cast<float>((dx * dx) + (dz * dz));
+        const float verticalDistanceFromPlayer = static_cast<float>(std::abs(chunkY - center.y));
+        const float forwardDot = static_cast<float>(dx) * forwardX + static_cast<float>(dz) * forwardZ;
+        const float forwardBias = std::max(0.0F, forwardDot) * 0.25F;
+        const float priority = (horizontalDistance2 * 0.20F)
+            + (verticalDistanceFromPlayer * 0.04F)
+            + layerBias
+            - forwardBias
+            - 8.0F;
+        surfaceVisibilityRequests_.push_back({coord, priority});
+    };
+
+    surfaceVisibilityRequests_.reserve(
+        static_cast<std::size_t>((surfaceRadius * 2 + 1) * (surfaceRadius * 2 + 1) * 2));
+
+    for (int dz = -surfaceRadius; dz <= surfaceRadius; ++dz) {
+        for (int dx = -surfaceRadius; dx <= surfaceRadius; ++dx) {
+            const auto chunkX = center.x + dx;
+            const auto chunkZ = center.z + dz;
+            const float worldX = static_cast<float>(chunkX * world::ChunkSize + world::ChunkSize / 2);
+            const float worldZ = static_cast<float>(chunkZ * world::ChunkSize + world::ChunkSize / 2);
+            const auto column = terrainGenerator_.sampleColumnAt(worldX, worldZ);
+            const auto surfaceChunkY =
+                world::floorDiv(static_cast<std::int64_t>(column.surfaceY), world::ChunkSize);
+
+            addSurfaceRequest(chunkX, surfaceChunkY, chunkZ, dx, dz, 0.0F);
+            if (column.isOcean) {
+                const auto seaChunkY =
+                    world::floorDiv(static_cast<std::int64_t>(column.seaLevel), world::ChunkSize);
+                addSurfaceRequest(chunkX, seaChunkY, chunkZ, dx, dz, 0.15F);
+            }
+            for (int skirt = 1; skirt <= kSurfaceSkirtChunksBelow; ++skirt) {
+                addSurfaceRequest(chunkX, surfaceChunkY - skirt, chunkZ, dx, dz, 0.65F * static_cast<float>(skirt));
+            }
+        }
+    }
+
+    std::sort(surfaceVisibilityRequests_.begin(), surfaceVisibilityRequests_.end(),
+        [](const world::ChunkRequest& lhs, const world::ChunkRequest& rhs) {
+            if (lhs.priority == rhs.priority) {
+                if (lhs.coord.y == rhs.coord.y) {
+                    if (lhs.coord.x == rhs.coord.x) {
+                        return lhs.coord.z < rhs.coord.z;
+                    }
+                    return lhs.coord.x < rhs.coord.x;
+                }
+                return lhs.coord.y < rhs.coord.y;
+            }
+            return lhs.priority < rhs.priority;
+        });
+}
+
 const std::vector<world::ChunkRequest>& Application::streamingRequestsForFrame()
 {
     const auto center = streamingCenter();
@@ -2156,6 +2259,7 @@ const std::vector<world::ChunkRequest>& Application::streamingRequestsForFrame()
     } else {
         streamingSettings.pinnedVerticalChunkY = static_cast<int>(world::floorDiv(seaLevelBlockY, world::ChunkSize));
     }
+    refreshSurfaceVisibilityRequests(center, streamSpaceOnly);
     const int forwardBucket = streamingForwardBucket(player_.forwardVector());
     const bool settingsChanged = cachedStreamingSettings_.renderDistanceChunks != streamingSettings.renderDistanceChunks
         || cachedStreamingSettings_.verticalRenderDistanceChunks != streamingSettings.verticalRenderDistanceChunks
@@ -2341,54 +2445,20 @@ const std::vector<world::ChunkRequest>& Application::streamingDispatchRequestsFo
         return true;
     };
 
-    // ATGS can put nearby surfaces many chunks above/below the player's
-    // current vertical band. Request a small bridge toward those surface
-    // slabs first; otherwise high terrain appears as a new LOD surface
-    // floating over old/low loaded chunks until vertical streaming catches up.
+    // ATGS can put nearby visible surfaces many chunks above/below the
+    // player's current vertical band. Dispatch a bounded number of those
+    // top-surface chunks before the ordinary slab requests. This is not a
+    // full vertical bridge; hidden terrain below the visible skin remains
+    // governed by verticalRenderDistanceChunks.
     {
-        const auto center = streamingCenter();
-        const int vRadius = std::max(0, config_.streaming.verticalRenderDistanceChunks);
-        const std::int64_t loadedMinY = center.y - vRadius;
-        const std::int64_t loadedMaxY = center.y + vRadius;
-        const bool streamSpaceOnly = config_.enableSpacePhaseA
-            && static_cast<float>(center.y * world::ChunkSize) >= config_.space.nearSpaceStartY;
-        const int surfaceRadius = std::min(config_.streaming.renderDistanceChunks, 10);
         const std::size_t surfaceBudget = std::max<std::size_t>(4U, targetCandidates / 3U);
         std::size_t surfaceAdded = 0;
-        if (!streamSpaceOnly && surfaceRadius > 0) {
-            for (int ring = 0; ring <= surfaceRadius && surfaceAdded < surfaceBudget; ++ring) {
-                for (int dz = -ring; dz <= ring && surfaceAdded < surfaceBudget; ++dz) {
-                    for (int dx = -ring; dx <= ring && surfaceAdded < surfaceBudget; ++dx) {
-                        if (std::max(std::abs(dx), std::abs(dz)) != ring) {
-                            continue;
-                        }
-                        const auto chunkX = center.x + dx;
-                        const auto chunkZ = center.z + dz;
-                        const float worldX = static_cast<float>(chunkX * world::ChunkSize + world::ChunkSize / 2);
-                        const float worldZ = static_cast<float>(chunkZ * world::ChunkSize + world::ChunkSize / 2);
-                        const auto column = terrainGenerator_.sampleColumnAt(worldX, worldZ);
-                        const std::int64_t surfaceChunkY =
-                            world::floorDiv(static_cast<std::int64_t>(column.surfaceY), world::ChunkSize);
-                        if (surfaceChunkY >= loadedMinY && surfaceChunkY <= loadedMaxY) {
-                            continue;
-                        }
-
-                        const std::int64_t step = surfaceChunkY > loadedMaxY ? -1 : 1;
-                        const std::int64_t stopExclusive = surfaceChunkY > loadedMaxY ? loadedMaxY : loadedMinY;
-                        for (std::int64_t y = surfaceChunkY;
-                             y != stopExclusive && surfaceAdded < surfaceBudget;
-                             y += step) {
-                            if (y >= loadedMinY && y <= loadedMaxY) {
-                                break;
-                            }
-                            const float verticalBias = static_cast<float>(std::abs(y - center.y)) * 0.05F;
-                            const float horizontalBias = static_cast<float>((dx * dx) + (dz * dz)) * 0.15F;
-                            if (tryAppendRequest({{chunkX, y, chunkZ}, horizontalBias + verticalBias - 4.0F})) {
-                                ++surfaceAdded;
-                            }
-                        }
-                    }
-                }
+        for (const auto& request : surfaceVisibilityRequests_) {
+            if (surfaceAdded >= surfaceBudget) {
+                break;
+            }
+            if (tryAppendRequest(request)) {
+                ++surfaceAdded;
             }
         }
     }
@@ -2664,24 +2734,41 @@ std::size_t Application::enqueueVisibleMeshWork(const std::vector<world::ChunkRe
         std::max<std::size_t>(maxEnqueues * 8U, 128U));
 
     std::size_t enqueued = 0;
+    const auto tryEnqueueMesh = [&](const world::ChunkRequest& request) {
+        const auto* chunk = chunks_.find(request.coord);
+        if (chunk == nullptr) {
+            return false;
+        }
+        if (chunk->state() != world::ChunkState::Resident && chunk->state() != world::ChunkState::MeshReady) {
+            return false;
+        }
+        if (!chunk->dirty().mesh && meshCache_.isCurrent(request.coord, chunk->revision())) {
+            return false;
+        }
+
+        return meshQueue_.enqueue(request.coord, chunk->revision(), chunk->meshRevision(), request.priority);
+    };
+
+    std::size_t surfaceScanned = 0;
+    const std::size_t maxSurfaceScans = std::min<std::size_t>(
+        surfaceVisibilityRequests_.size(),
+        std::max<std::size_t>(maxEnqueues * 4U, 64U));
+    for (const auto& request : surfaceVisibilityRequests_) {
+        if (surfaceScanned++ >= maxSurfaceScans || enqueued >= maxEnqueues) {
+            break;
+        }
+        if (tryEnqueueMesh({request.coord, std::min(request.priority, -45.0F)})) {
+            ++enqueued;
+        }
+    }
+
     std::size_t scanned = 0;
     for (const auto& request : requests) {
         if (scanned++ >= maxScans || enqueued >= maxEnqueues) {
             break;
         }
 
-        const auto* chunk = chunks_.find(request.coord);
-        if (chunk == nullptr) {
-            continue;
-        }
-        if (chunk->state() != world::ChunkState::Resident && chunk->state() != world::ChunkState::MeshReady) {
-            continue;
-        }
-        if (!chunk->dirty().mesh && meshCache_.isCurrent(request.coord, chunk->revision())) {
-            continue;
-        }
-
-        if (meshQueue_.enqueue(request.coord, chunk->revision(), chunk->meshRevision(), -50.0F)) {
+        if (tryEnqueueMesh({request.coord, std::min(request.priority, -50.0F)})) {
             ++enqueued;
         }
     }
