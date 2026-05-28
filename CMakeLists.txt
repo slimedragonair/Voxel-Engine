@@ -183,10 +183,14 @@ add_library(voxel_engine STATIC
     src/voxel/world/FlatTerrainGenerator.cpp
     src/voxel/world/LightPropagator.cpp
     src/voxel/world/NoiseTerrainGenerator.cpp
+    src/voxel/world/NoiseTerrainWorldShape.cpp
     src/voxel/world/SpaceEnvironment.cpp
     src/voxel/world/TerrainColumnPrepass.cpp
     src/voxel/world/TerrainDefinitionRegistry.cpp
     src/voxel/world/TerrainPipeline.cpp
+    src/voxel/world/TerrainPipelineFoliage.cpp
+    src/voxel/world/TerrainPipelineStages.cpp
+    src/voxel/world/TerrainPipelineStructures.cpp
     src/voxel/world/ChunkJobMailbox.cpp
     src/voxel/world/ChunkDirtyQueue.cpp
     src/voxel/world/ChunkManager.cpp
