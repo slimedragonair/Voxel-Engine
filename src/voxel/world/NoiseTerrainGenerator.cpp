@@ -264,7 +264,8 @@ std::uint64_t NoiseTerrainGenerator::terrainVersion() const noexcept
     // ATGS v1.1: data-driven height profiles shape live surface heights.
     // ATGS v1.2: mountain profile easing / foothill blending.
     // ATGS v1.3: weighted land profile blending and smoother profile activation.
-    std::uint64_t version = 0xc6f14a92b3d8075eULL;
+    // ATGS v1.4: profile displacement caps and plains-profile fadeout.
+    std::uint64_t version = 0xd7a93f2160c4e88bULL;
     version = hashCombine(version, floatBits(settings_.minWorldY));
     version = hashCombine(version, floatBits(settings_.maxWorldY));
     version = hashCombine(version, floatBits(settings_.surfaceFrequency));

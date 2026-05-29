@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -535,10 +536,24 @@ int main()
     voxel::world::NoiseTerrainGenerator baseHeightProfileGen;
     voxel::world::NoiseTerrainGenerator forcedHeightProfileGen;
     forcedHeightProfileGen.setTerrainDefinitions(&customTerrainDefinitions);
-    const auto baseProfileColumn = baseHeightProfileGen.sampleColumnAt(72.0F, 88.0F);
-    const auto forcedProfileColumn = forcedHeightProfileGen.sampleColumnAt(72.0F, 88.0F);
-    VOXEL_CHECK(forcedProfileColumn.surfaceY > baseProfileColumn.surfaceY + 200);
-    VOXEL_CHECK(forcedProfileColumn.biome == voxel::world::TerrainBiomeId::Plains);
+    int strongestForcedLift = std::numeric_limits<int>::min();
+    bool forcedProfileSelectedPlains = false;
+    for (int z = -4096; z <= 4096; z += 256) {
+        for (int x = -4096; x <= 4096; x += 256) {
+            const auto baseProfileColumn =
+                baseHeightProfileGen.sampleColumnAt(static_cast<float>(x), static_cast<float>(z));
+            const auto forcedProfileColumn =
+                forcedHeightProfileGen.sampleColumnAt(static_cast<float>(x), static_cast<float>(z));
+            strongestForcedLift = std::max(
+                strongestForcedLift,
+                forcedProfileColumn.surfaceY - baseProfileColumn.surfaceY);
+            forcedProfileSelectedPlains = forcedProfileSelectedPlains
+                || forcedProfileColumn.biome == voxel::world::TerrainBiomeId::Plains;
+        }
+    }
+    VOXEL_CHECK(strongestForcedLift > 120);
+    VOXEL_CHECK(strongestForcedLift < 280);
+    VOXEL_CHECK(forcedProfileSelectedPlains);
     const auto renderCatalog = loadedBlocks.buildRenderCatalog();
     VOXEL_CHECK(renderCatalog.get(voxel::world::makeBlockState(voxel::BlockTypeId{3})).surface == voxel::render::meshing::MeshSurface::Transparent);
     VOXEL_CHECK(!renderCatalog.get(voxel::world::makeBlockState(voxel::BlockTypeId{3})).occludesNeighborFaces);

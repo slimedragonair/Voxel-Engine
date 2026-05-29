@@ -241,6 +241,20 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     return smooth01(std::max(latitude, cold));
 }
 
+[[nodiscard]] float plainsInfluence(const WorldShapeSignals& s) noexcept
+{
+    const float strongestSpecial = std::max({
+        highlandInfluence(s),
+        plateauInfluence(s),
+        mountainInfluence(s),
+        volcanicInfluence(s),
+        magicInfluence(s),
+        arcaneFractureInfluence(s),
+        polarInfluenceForHeight(s),
+    });
+    return smooth01(1.0F - strongestSpecial);
+}
+
 [[nodiscard]] float highlandsSurfaceY(
     const WorldShapeSignals& s,
     const NoiseTerrainSettings& settings) noexcept
@@ -293,7 +307,8 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     }
     case TerrainClass::Plateau: {
         const float raw = settings.plateauHeight + landT * (amp * 0.50F) + detail * (amp * 0.26F);
-        return terrace(raw / 340.0F, 7.0F, 0.58F) * 340.0F;
+        const float terraceStrength = 0.22F + plateauInfluence(s) * 0.22F;
+        return terrace(raw / 340.0F, 7.0F, terraceStrength) * 340.0F;
     }
     case TerrainClass::Highlands:
         return highlandsSurfaceY(s, settings);
@@ -315,22 +330,26 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     const WorldShapeSignals& s,
     const NoiseTerrainSettings& settings) noexcept
 {
-    float surfaceY = terrainClassSurfaceY(TerrainClass::Plains, s, settings);
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Highlands, s, settings),
-        highlandInfluence(s));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Plateau, s, settings),
-        plateauInfluence(s) * (1.0F - mountainInfluence(s) * 0.35F));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Mountains, s, settings),
-        mountainInfluence(s));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Volcanic, s, settings),
-        volcanicInfluence(s));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Magic, s, settings),
-        magicInfluence(s) * (1.0F - arcaneFractureInfluence(s) * 0.45F));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::ArcaneFracture, s, settings),
-        arcaneFractureInfluence(s));
-    surfaceY = lerp(surfaceY, terrainClassSurfaceY(TerrainClass::Polar, s, settings),
-        polarInfluenceForHeight(s));
-    return surfaceY;
+    const float mountainW = mountainInfluence(s);
+    const float plateauW = plateauInfluence(s) * (1.0F - mountainW * 0.40F);
+    const float arcaneW = arcaneFractureInfluence(s);
+    const float magicW = magicInfluence(s) * (1.0F - arcaneW * 0.50F);
+    const float polarW = polarInfluenceForHeight(s);
+    const float highlandW = highlandInfluence(s) * (1.0F - mountainW * 0.30F);
+    const float volcanicW = volcanicInfluence(s);
+    const float plainsW = std::max(0.05F, plainsInfluence(s));
+
+    const float weighted =
+        terrainClassSurfaceY(TerrainClass::Plains, s, settings) * plainsW
+        + terrainClassSurfaceY(TerrainClass::Highlands, s, settings) * highlandW
+        + terrainClassSurfaceY(TerrainClass::Plateau, s, settings) * plateauW
+        + terrainClassSurfaceY(TerrainClass::Mountains, s, settings) * mountainW
+        + terrainClassSurfaceY(TerrainClass::Volcanic, s, settings) * volcanicW
+        + terrainClassSurfaceY(TerrainClass::Magic, s, settings) * magicW
+        + terrainClassSurfaceY(TerrainClass::ArcaneFracture, s, settings) * arcaneW
+        + terrainClassSurfaceY(TerrainClass::Polar, s, settings) * polarW;
+    const float totalWeight = plainsW + highlandW + plateauW + mountainW + volcanicW + magicW + arcaneW + polarW;
+    return weighted / std::max(0.001F, totalWeight);
 }
 
 [[nodiscard]] float blendedTerrainSurfaceY(
@@ -345,7 +364,7 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     const float landY = landBlendSurfaceY(s, settings);
     if (terrainClass == TerrainClass::OceanShelf || s.continentalness < 0.08F) {
         const float shelfY = terrainClassSurfaceY(TerrainClass::OceanShelf, s, settings);
-        const float shoreT = smooth01(remap(s.continentalness, -0.18F, 0.08F, 0.0F, 1.0F));
+        const float shoreT = smooth01(remap(s.continentalness, -0.24F, 0.16F, 0.0F, 1.0F));
         return lerp(shelfY, landY, shoreT);
     }
 
@@ -358,6 +377,7 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     float currentSurfaceY,
     const NoiseTerrainSettings& settings) noexcept
 {
+    if (profile.terrainClass == "Plains") return plainsInfluence(signals);
     if (profile.terrainClass == "Mountains") return mountainInfluence(signals);
     if (profile.terrainClass == "Highlands") return highlandInfluence(signals);
     if (profile.terrainClass == "Plateau") return plateauInfluence(signals);
@@ -370,7 +390,7 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
         return smooth01(remap(settings.seaLevel - currentSurfaceY,
             settings.shelfMinDepth, settings.abyssMaxDepth, 0.0F, 1.0F));
     }
-    return 1.0F;
+    return 0.0F;
 }
 
 [[nodiscard]] float terrainProfileT(
@@ -418,20 +438,22 @@ WorldShapeSignals lerpSignals(const WorldShapeSignals& a, const WorldShapeSignal
     const float detail = std::clamp(signals.detail, -1.0F, 1.0F) * range * profile.detailScale;
     const float ridge = std::pow(std::max(0.0F, signals.peaksValleys * 0.5F + 0.5F), 1.65F)
         * range * profile.ridgeScale * 0.22F;
+    const float classBlend = profileActivation(profile, signals, currentSurfaceY, settings);
 
     float profiledY = minY + baseT * range + detail + ridge;
     if (profile.terraceSteps > 1.0F && profile.terraceStrength > 0.0F) {
         profiledY = minY + terrace((profiledY - minY) / range,
             profile.terraceSteps,
-            std::clamp(profile.terraceStrength, 0.0F, 1.0F)) * range;
+            std::clamp(profile.terraceStrength * (0.35F + classBlend * 0.65F), 0.0F, 1.0F)) * range;
     }
 
     // The profile is authoritative enough to shape the terrain, but keep a
     // portion of the class generator so existing seeds do not snap to a new
     // surface when a pack only tightens ranges slightly.
-    constexpr float kProfileBlend = 0.68F;
-    const float classBlend = profileActivation(profile, signals, currentSurfaceY, settings);
-    return lerp(currentSurfaceY, profiledY, kProfileBlend * classBlend);
+    constexpr float kProfileBlend = 0.58F;
+    const float targetY = lerp(currentSurfaceY, profiledY, kProfileBlend * classBlend);
+    const float maxProfileDelta = 36.0F + classBlend * 220.0F;
+    return currentSurfaceY + std::clamp(targetY - currentSurfaceY, -maxProfileDelta, maxProfileDelta);
 }
 
 [[nodiscard]] TerrainBiomeId biomeIdFromDefinitionId(const std::string& id, float temperature) noexcept
